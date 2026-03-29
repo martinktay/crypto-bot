@@ -26,6 +26,7 @@ class RuntimeState:
     trades: list[dict] = field(default_factory=list)
     positions: list[dict] = field(default_factory=list)
     approvals: dict[str, PendingApproval] = field(default_factory=dict)
+    recent_outcomes: list[dict] = field(default_factory=list)
 
 
 runtime_state: RuntimeState | None = None

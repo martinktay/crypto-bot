@@ -9,13 +9,12 @@ from app.execution.engine import ExecutionEngine
 from app.knowledge_base.reasoning import ReasoningEngine
 from app.market_data.provider import MarketDataProvider
 from app.risk_management.engine import RiskEngine
-from app.strategies.ema_rsi import EmaRsiStrategy
+from app.strategies.registry import build_strategy
 
 
 class SignalPipeline:
     def __init__(self) -> None:
         self.market_data = MarketDataProvider()
-        self.strategy = EmaRsiStrategy()
         self.risk_engine = RiskEngine()
         self.execution_engine = ExecutionEngine()
         self.reasoning_engine = ReasoningEngine()
@@ -23,25 +22,32 @@ class SignalPipeline:
 
     def run_cycle(self, state: RuntimeState) -> list[dict]:
         outcomes: list[dict] = []
+        strategy = build_strategy(state.strategy)
 
         for symbol in state.symbols:
             for timeframe in state.timeframes:
                 raw = self.market_data.fetch_ohlcv(symbol, timeframe)
                 df = pd.DataFrame(raw, columns=["ts", "open", "high", "low", "close", "volume"])
-                signal = self.strategy.generate(symbol, timeframe, df)
+                signal = strategy.generate(symbol, timeframe, df)
                 ai_explanation = self.reasoning_engine.explain(signal, context="")
-                state.signals.insert(0, signal)
-                state.signals = state.signals[:100]
 
-                approved, risk_note = self.risk_engine.validate_signal(signal)
+                approved_signal, risk_note = self.risk_engine.validate_signal(signal)
+                approved_limits, limits_note = self.risk_engine.validate_runtime_limits(state, signal)
+                approved = approved_signal and approved_limits
+
                 outcome = {
                     "symbol": symbol,
                     "timeframe": timeframe,
+                    "strategy": strategy.name,
                     "signal": signal.signal,
                     "confidence": signal.confidence,
                     "risk_note": risk_note,
+                    "limits_note": limits_note,
                     "ai_explanation": ai_explanation,
                 }
+
+                state.signals.insert(0, signal)
+                state.signals = state.signals[:100]
 
                 if state.mode == TradingMode.MANUAL_APPROVAL and approved:
                     pending: PendingApproval = self.approval_workflow.create(signal)
@@ -62,8 +68,10 @@ class SignalPipeline:
                             },
                         )
                         state.trades = state.trades[:100]
+
                 outcomes.append(outcome)
 
+        state.recent_outcomes = outcomes[:50]
         return outcomes
 
     def apply_approval_decision(self, state: RuntimeState, approval_id: str, approved: bool) -> dict:

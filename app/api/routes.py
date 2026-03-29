@@ -9,6 +9,7 @@ from app.core.state import get_runtime_state
 from app.schemas.mode import ModeUpdateRequest
 from app.schemas.signal import SignalContract
 from app.services.signal_service import SignalPipeline
+from app.strategies.registry import STRATEGIES
 
 router = APIRouter()
 pipeline = SignalPipeline()
@@ -34,6 +35,7 @@ def status() -> dict:
         "timeframes": state.timeframes,
         "strategy": state.strategy,
         "pending_approvals": len(state.approvals),
+        "recent_outcomes": len(state.recent_outcomes),
     }
 
 
@@ -55,6 +57,27 @@ def signals() -> list[SignalContract]:
             )
         )
     return state.signals
+
+
+@router.get("/why/{index}")
+def why(index: int) -> dict:
+    state = get_runtime_state()
+    if index < 0 or index >= len(state.recent_outcomes):
+        return {"result": "not_found"}
+    return state.recent_outcomes[index]
+
+
+@router.get("/insights")
+def insights() -> dict:
+    state = get_runtime_state()
+    longs = len([s for s in state.signals[:50] if s.signal == SignalDirection.LONG])
+    shorts = len([s for s in state.signals[:50] if s.signal == SignalDirection.SHORT])
+    return {
+        "recent_signal_count": len(state.signals[:50]),
+        "recent_longs": longs,
+        "recent_shorts": shorts,
+        "recent_outcomes": state.recent_outcomes[:10],
+    }
 
 
 @router.post("/signals/run")
@@ -94,8 +117,11 @@ def set_symbols(payload: list[str]) -> dict[str, list[str]]:
 
 @router.post("/strategy/config")
 def set_strategy(payload: dict) -> dict:
+    strategy_name = payload.get("name", "ema_rsi")
+    if strategy_name not in STRATEGIES:
+        return {"result": "rejected", "supported": list(STRATEGIES)}
     state = get_runtime_state()
-    state.strategy = payload.get("name", "ema_rsi")
+    state.strategy = strategy_name
     return {"strategy": state.strategy}
 
 

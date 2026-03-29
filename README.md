@@ -23,12 +23,23 @@ crypto-telegram-bot/
 
 - FastAPI endpoints:
   - Core: `/health`, `/status`, `/signals`, `/signals/run`, `/trades`, `/positions`, `/mode`, `/symbols`, `/strategy/config`, `/metrics`
-  - Manual control: `/pause`, `/resume`
+  - Operator: `/pause`, `/resume`, `/why/{index}`, `/insights`
   - Approval workflow: `/approvals`, `/approvals/{approval_id}`
-- Default operation mode is paper-trading oriented and live trading remains disabled unless explicitly enabled.
-- Signal cycle orchestration using market data + EMA/RSI strategy + risk validation + execution routing.
-- Manual approval flow for `manual_approval` mode with expiring approvals.
-- Knowledge-base scaffolding for explainable advisory context.
+- Strategy registry supports pluggable strategy selection (`ema_rsi`, `breakout_volume`).
+- Runtime risk limits include signal cooldown and max open positions checks.
+- Market data provider includes basic retry/backoff for CCXT failures.
+- APScheduler background job runs signal cycle every 5 minutes (except paused or signal-only mode).
+
+## Phase 1 completion checklist
+
+- [x] BTC/USDT + 15m path implemented
+- [x] EMA/RSI strategy integrated into execution cycle
+- [x] Manual approval objects with expiry and decision endpoint
+- [x] Paper trade simulation path
+- [x] Live mode blocked by default and guarded by env flag
+- [ ] Telegram command/callback handlers (in progress)
+- [ ] DB-backed persistence replacing in-memory runtime state
+- [ ] Full risk policy coverage (daily loss cap, losing-trade cooldown, duplicate execution windows)
 
 ## Local run
 
@@ -43,6 +54,7 @@ Then open:
 - `GET http://localhost:8000/health`
 - `POST http://localhost:8000/signals/run`
 - `GET http://localhost:8000/approvals`
+- `GET http://localhost:8000/insights`
 
 ## Docker run
 
@@ -61,7 +73,6 @@ docker compose up --build
 
 1. Replace in-memory runtime state with PostgreSQL-backed repositories and transactions.
 2. Implement full Telegram command handlers and callback button approval integration.
-3. Add robust retry/backoff and circuit-breakers around exchange and Telegram APIs.
-4. Complete requested DB tables (`orders`, `risk_events`, `audit_logs`, `system_logs`, etc.) and migrations.
-5. Integrate real OpenAI embeddings/reasoning with strict timeout budgets.
-6. Add integration tests for end-to-end signal, approval, and paper-trade lifecycle.
+3. Complete requested DB tables (`orders`, `risk_events`, `audit_logs`, `system_logs`, etc.) and migrations.
+4. Integrate real OpenAI embeddings/reasoning with strict timeout budgets and robust fallback behavior.
+5. Add integration tests for end-to-end signal, approval, and paper-trade lifecycle.

@@ -1,2 +1,30 @@
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+.env
+.venv/
+venv/
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+dist/
+build/
+*.db
+*.sqlite
+*.sqlite3
+
+# Local artifacts
+models/*.zip
+!models/.gitkeep
+
+# Local transcription scratch (ffmpeg extracts)
+.tmp_record_*
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

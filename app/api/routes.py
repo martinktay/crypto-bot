@@ -1,18 +1,23 @@
 from datetime import datetime, timezone
+import logging
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.enums import SignalDirection, TradingMode
-from app.core.state import get_runtime_state
+from app.core.security import ApiKeyDep
+from app.core.enums import SignalDirection
+from app.db.repository import StateRepository
+from app.db.session import get_db
+from app.schemas.backtest import BacktestRequest, BacktestResult
 from app.schemas.mode import ModeUpdateRequest
 from app.schemas.signal import SignalContract
-from app.services.signal_service import SignalPipeline
+from app.services.signal_service import get_pipeline
 from app.strategies.registry import STRATEGIES
 
 router = APIRouter()
-pipeline = SignalPipeline()
+logger = logging.getLogger(__name__)
 
 
 class ApprovalDecision(BaseModel):
@@ -25,25 +30,30 @@ def health() -> dict[str, str]:
 
 
 @router.get("/status")
-def status() -> dict:
-    state = get_runtime_state()
+def status(db: Session = Depends(get_db), _: None = ApiKeyDep) -> dict:
+    repo = StateRepository(db)
+    state = repo.get_runtime_state_snapshot()
+    summary = repo.get_signal_performance_summary()
+    
     return {
-        "mode": state.mode,
+        "approval_mode": state.approval_mode.value,
         "paused": state.paused,
-        "live_enabled": settings.enable_live_trading,
         "symbols": state.symbols,
         "timeframes": state.timeframes,
         "strategy": state.strategy,
-        "pending_approvals": len(state.approvals),
-        "recent_outcomes": len(state.recent_outcomes),
+        "total_signals": summary["total_signals"],
+        "signal_accuracy": summary["win_rate"],
+        "avg_growth": summary["avg_growth"],
+        "max_ae": summary["max_ae"],
+        "recent_outcomes_count": len(state.signals),
     }
 
 
 @router.get("/signals")
-def signals() -> list[SignalContract]:
-    state = get_runtime_state()
+def signals(db: Session = Depends(get_db), _: None = ApiKeyDep) -> list[SignalContract]:
+    state = StateRepository(db).get_runtime_state_snapshot()
     if not state.signals:
-        state.signals.append(
+        return [
             SignalContract(
                 symbol="BTC/USDT",
                 timeframe="15m",
@@ -55,105 +65,183 @@ def signals() -> list[SignalContract]:
                 reason="No signal generated yet",
                 timestamp=datetime.now(timezone.utc),
             )
-        )
+        ]
     return state.signals
 
 
 @router.get("/why/{index}")
-def why(index: int) -> dict:
-    state = get_runtime_state()
-    if index < 0 or index >= len(state.recent_outcomes):
+def why(index: int, db: Session = Depends(get_db), _: None = ApiKeyDep) -> dict:
+    repo = StateRepository(db)
+    outcomes = repo.get_recent_outcomes()
+    if index < 0 or index >= len(outcomes):
         return {"result": "not_found"}
-    return state.recent_outcomes[index]
+    return outcomes[index]
 
 
 @router.get("/insights")
-def insights() -> dict:
-    state = get_runtime_state()
+def insights(db: Session = Depends(get_db), _: None = ApiKeyDep) -> dict:
+    repo = StateRepository(db)
+    state = repo.get_runtime_state_snapshot()
+    outcomes = repo.get_recent_outcomes()
+    
     longs = len([s for s in state.signals[:50] if s.signal == SignalDirection.LONG])
     shorts = len([s for s in state.signals[:50] if s.signal == SignalDirection.SHORT])
+    
+    # Fetch recent 'lessons' from knowledge base
+    lessons = repo.get_knowledge_documents(source_type="optimization_lesson", limit=3)
+    
     return {
         "recent_signal_count": len(state.signals[:50]),
         "recent_longs": longs,
         "recent_shorts": shorts,
-        "recent_outcomes": state.recent_outcomes[:10],
+        "recent_outcomes": outcomes[:10],
+        "recent_lessons": [
+            {"title": doc.title, "content": doc.content, "metadata": doc.metadata_json}
+            for doc in lessons
+        ]
     }
 
 
 @router.post("/signals/run")
-def run_signal_cycle() -> dict:
-    state = get_runtime_state()
+def run_signal_cycle(db: Session = Depends(get_db), _: None = ApiKeyDep) -> dict:
+    state = StateRepository(db).get_runtime_state_snapshot()
     if state.paused:
         return {"result": "paused"}
-    outcomes = pipeline.run_cycle(state)
+    pipeline = get_pipeline()
+    outcomes = pipeline.run_cycle(db)
     return {"result": "ok", "count": len(outcomes), "outcomes": outcomes}
 
 
-@router.get("/trades")
-def trades() -> list:
-    return get_runtime_state().trades
 
-
-@router.get("/positions")
-def positions() -> list:
-    return get_runtime_state().positions
 
 
 @router.post("/mode")
-def set_mode(payload: ModeUpdateRequest) -> dict[str, str]:
-    if payload.mode == TradingMode.AUTO_TRADE_LIVE and not settings.enable_live_trading:
-        return {"result": "rejected: enable live trading flag first"}
-    state = get_runtime_state()
-    state.mode = payload.mode
-    return {"result": f"mode set to {payload.mode.value}"}
+def set_mode(payload: ModeUpdateRequest, db: Session = Depends(get_db), _: None = ApiKeyDep) -> dict[str, str]:
+    repo = StateRepository(db)
+    repo.update_mode(approval_mode=payload.approval_mode)
+    
+    # fetch updated
+    state = repo.get_runtime_state_snapshot()
+    return {
+        "result": "mode updated",
+        "approval_mode": state.approval_mode.value,
+    }
 
 
 @router.post("/symbols")
-def set_symbols(payload: list[str]) -> dict[str, list[str]]:
-    state = get_runtime_state()
-    state.symbols = payload
+def set_symbols(payload: list[str], db: Session = Depends(get_db), _: None = ApiKeyDep) -> dict[str, list[str]]:
+    StateRepository(db).update_symbols_timeframes_strategy(symbols=payload)
     return {"symbols": payload}
 
 
 @router.post("/strategy/config")
-def set_strategy(payload: dict) -> dict:
+def set_strategy(payload: dict, db: Session = Depends(get_db), _: None = ApiKeyDep) -> dict:
     strategy_name = payload.get("name", "ema_rsi")
     if strategy_name not in STRATEGIES:
         return {"result": "rejected", "supported": list(STRATEGIES)}
-    state = get_runtime_state()
-    state.strategy = strategy_name
-    return {"strategy": state.strategy}
+    StateRepository(db).update_symbols_timeframes_strategy(strategy=strategy_name)
+    return {"strategy": strategy_name}
 
 
 @router.get("/approvals")
-def list_approvals() -> list[dict]:
+def list_approvals(db: Session = Depends(get_db), _: None = ApiKeyDep) -> list[dict]:
+    state = StateRepository(db).get_runtime_state_snapshot()
     return [
         {
             "approval_id": item.approval_id,
-            "symbol": item.signal.symbol,
-            "signal": item.signal.signal,
             "status": item.status,
             "expires_at": item.expires_at.isoformat(),
+            "signal": item.signal.model_dump(mode="json"),
         }
-        for item in get_runtime_state().approvals.values()
+        for item in state.approvals.values()
     ]
 
 
 @router.post("/approvals/{approval_id}")
-def decide_approval(approval_id: str, payload: ApprovalDecision) -> dict:
-    state = get_runtime_state()
-    return pipeline.apply_approval_decision(state, approval_id, payload.approved)
+def decide_approval(approval_id: str, payload: ApprovalDecision, db: Session = Depends(get_db), _: None = ApiKeyDep) -> dict:
+    pipeline = get_pipeline()
+    return pipeline.apply_approval_decision(db, approval_id, payload.approved)
 
 
 @router.post("/pause")
-def pause() -> dict[str, bool]:
-    state = get_runtime_state()
-    state.paused = True
-    return {"paused": state.paused}
+def pause(db: Session = Depends(get_db), _: None = ApiKeyDep) -> dict[str, bool]:
+    StateRepository(db).update_mode(paused=True)
+    return {"paused": True}
 
 
 @router.post("/resume")
-def resume() -> dict[str, bool]:
-    state = get_runtime_state()
-    state.paused = False
-    return {"paused": state.paused}
+def resume(db: Session = Depends(get_db), _: None = ApiKeyDep) -> dict[str, bool]:
+    StateRepository(db).update_mode(paused=False)
+    return {"paused": False}
+
+
+@router.post("/backtest", response_model=BacktestResult)
+def run_backtest(request: BacktestRequest, db: Session = Depends(get_db), _: None = ApiKeyDep) -> BacktestResult:
+    service = BacktestService()
+    repo = StateRepository(db)
+    return service.run_backtest(request, repo=repo)
+
+
+@router.get("/backtest/history")
+def get_backtest_history(limit: int = 10, db: Session = Depends(get_db), _: None = ApiKeyDep) -> list:
+    repo = StateRepository(db)
+    return repo.get_backtest_history(limit=limit)
+
+
+@router.post("/optimize")
+async def run_optimization(db: Session = Depends(get_db), _: None = ApiKeyDep):
+    from app.services.optimizer import OptimizerEngine
+    from app.schemas.optimizer import OptimizerRequest
+    from app.api.ws_routes import broadcast_signal
+    from app.knowledge_base.reasoning import ReasoningEngine
+    from app.knowledge_base.embeddings import EmbeddingProvider
+    
+    repo = StateRepository(db)
+    engine = OptimizerEngine()
+    
+    # Using fixed request for UI triggers, could be parameterized later
+    request = OptimizerRequest(population_size=10, generations=2) 
+    
+    logger.info("Triggering hybrid optimization sequence...")
+    result = await engine.run(request)
+    
+    # --- PHASE 7: Closed-Loop Learning (Semantic Archiving) ---
+    try:
+        reasoner = ReasoningEngine()
+        embedder = EmbeddingProvider()
+        
+        # Analyze why these params worked
+        lesson_text = reasoner.analyze_simulation_result(result)
+        vector = embedder.embed(lesson_text)
+        
+        repo.ingest_knowledge_document(
+            title=f"Evolution Lesson: {result.strategy} {result.symbol}",
+            content=lesson_text,
+            source_type="optimization_lesson",
+            vector=vector,
+            metadata={"strategy": result.strategy, "symbol": result.symbol, "sharpe": result.best_sharpe}
+        )
+        logger.info("Neural lesson archived: %s", result.strategy)
+    except Exception as exc:
+        logger.error("Failed to archive neural lesson: %s", exc)
+
+    # Broadcast full result to connected browsers
+    await broadcast_signal("optimization_complete", result.model_dump(mode="json"))
+    
+    return result
+
+
+@router.post("/scanner/run")
+async def run_scanner(db: Session = Depends(get_db), _: None = ApiKeyDep):
+    """Run a global Alpha Scan for futures trading opportunities."""
+    from app.services.scanner import FuturesScanner
+    
+    scanner = FuturesScanner()
+    # Scaning top 50, but only returning top 10 results
+    results = await scanner.scan(limit=50)
+    
+    return {
+        "status": "success",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "candidates": results[:10]
+    }

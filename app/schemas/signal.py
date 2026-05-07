@@ -13,5 +13,8 @@ class SignalContract(BaseModel):
     stop_loss: float
     take_profit: float
     confidence: float = Field(ge=0.0, le=100.0)
+    order_type: str = "LIMIT"
     reason: str
+    ai_explanation: str = ""
+    atr_value: float | None = None
     timestamp: datetime

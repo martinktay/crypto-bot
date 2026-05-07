@@ -1,7 +1,7 @@
 from pydantic import BaseModel
 
-from app.core.enums import TradingMode
+from app.core.enums import ApprovalMode
 
 
 class ModeUpdateRequest(BaseModel):
-    mode: TradingMode
+    approval_mode: ApprovalMode | None = None

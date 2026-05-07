@@ -3,16 +3,17 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
+from app.core.config import settings
 from app.core.state import PendingApproval
 from app.schemas.signal import SignalContract
 
 
 class ApprovalWorkflow:
-    def __init__(self, timeout_minutes: int = 5):
-        self.timeout_minutes = timeout_minutes
+    def __init__(self, timeout_seconds: int | None = None):
+        self.timeout_seconds = timeout_seconds or settings.manual_approval_timeout_seconds
 
     def expires_at(self) -> datetime:
-        return datetime.now(timezone.utc) + timedelta(minutes=self.timeout_minutes)
+        return datetime.now(timezone.utc) + timedelta(seconds=self.timeout_seconds)
 
     def create(self, signal: SignalContract) -> PendingApproval:
         return PendingApproval(

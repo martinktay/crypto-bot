@@ -1,78 +1,68 @@
-# Crypto Telegram Bot MVP
+# 🚀 Crypto Signal Alert Bot (Signal-Only)
 
-Production-minded MVP for a Telegram crypto signal bot with optional execution modes and a knowledge base.
+Production-minded AI-powered Telegram signal bot with manual approval, signal memory, and a premium monitoring dashboard. **This bot is built on a Signal-Only architecture**, focusing exclusively on high-confidence signal generation without direct exchange execution.
 
-## Proposed file tree
+## ✨ Key Features
+- **Global Futures Scanner**: Simultaneously scans top-volume Perpetual Swap markets for high-probability setups.
+- **Hybrid RL+GA Optimization**: Evolution-based parameter tuning combined with Reinforcement Learning (PPO) for intelligent signal filtering.
+- **Neural Lessons (Knowledge Base)**: Uses RAG (Retrieval-Augmented Generation) to recall past market behavior and provide AI-driven reasoning for every signal.
+- **Manual Approval Workflow**: 1-click signal vetting via interactive Telegram buttons (✅ Approve / ❌ Reject).
+- **Premium Dashboard**: Data-dense, glassmorphism-inspired UI for real-time monitoring and strategy management.
 
-```text
-crypto-telegram-bot/
-  app/
-    api/ core/ db/ models/ schemas/ services/ utils/
-    market_data/ strategies/ risk_management/ execution/
-    telegram_bot/ approval_workflow/ knowledge_base/ monitoring/
-  tests/
-  alembic/
-  docker/
-  .env.example
-  Dockerfile
-  docker-compose.yml
-  pyproject.toml
-```
-
-## Current MVP capabilities
-
-- FastAPI endpoints:
-  - Core: `/health`, `/status`, `/signals`, `/signals/run`, `/trades`, `/positions`, `/mode`, `/symbols`, `/strategy/config`, `/metrics`
-  - Operator: `/pause`, `/resume`, `/why/{index}`, `/insights`
-  - Approval workflow: `/approvals`, `/approvals/{approval_id}`
-- Strategy registry supports pluggable strategy selection (`ema_rsi`, `breakout_volume`).
-- Runtime risk limits include signal cooldown and max open positions checks.
-- Market data provider includes basic retry/backoff for CCXT failures.
-- APScheduler background job runs signal cycle every 5 minutes (except paused or signal-only mode).
-
-## Phase 1 completion checklist
-
-- [x] BTC/USDT + 15m path implemented
-- [x] EMA/RSI strategy integrated into execution cycle
-- [x] Manual approval objects with expiry and decision endpoint
-- [x] Paper trade simulation path
-- [x] Live mode blocked by default and guarded by env flag
-- [ ] Telegram command/callback handlers (in progress)
-- [ ] DB-backed persistence replacing in-memory runtime state
-- [ ] Full risk policy coverage (daily loss cap, losing-trade cooldown, duplicate execution windows)
-
-## Local run
+## ⚡ Quick Start
 
 ```bash
+# 1. Clone and configure
 cp .env.example .env
+# Edit .env — set TELEGRAM_BOT_TOKEN, TELEGRAM_ADMIN_CHAT_ID, OPENAI_API_KEY
+
+# 2. Start infrastructure (PostgreSQL with pgvector + Redis)
+docker compose up -d db redis
+
+# 3. Run migrations
+alembic upgrade head
+
+# 4. Install and run
 pip install -e .[dev]
 uvicorn app.main:app --reload
 ```
 
-Then open:
+## 🛠 Operation Modes
 
-- `GET http://localhost:8000/health`
-- `POST http://localhost:8000/signals/run`
-- `GET http://localhost:8000/approvals`
-- `GET http://localhost:8000/insights`
+**Approval modes** (APPROVAL_MODE):
+- `auto` — Signals are dispatched to Telegram/WebSockets immediately after risk checks.
+- `manual_approval` — Signals require human approval via Telegram before dispatch (default).
 
-## Docker run
+## 🧠 Neural Journaling
+The bot maintains a "Neural Memory" of past trades and market conditions. 
+- **Learning**: Every approved/rejected signal's outcome can be ingested as a "Lesson".
+- **Retrieval**: When a new signal is generated, the bot retrieves similar past lessons to refine its AI reasoning.
+- **Explainability**: Use `/why` in Telegram or the Dashboard to see the underlying AI rationale for any signal.
 
+## 📊 Dashboard & Monitoring
+Access the web dashboard at `http://localhost:8000/`.
+- **Trade Metrics Grid**: Real-time signal cards with Entry, TP, SL, and Confidence.
+- **Optimization Panel**: Trigger and monitor RL+GA evolution runs live.
+- **Neural Insights**: Browse the global knowledge base and recent market lessons.
+
+## 🤖 Telegram Commands
+
+| Command | Access | Description |
+|---|---|---|
+| `/start` | Public | Welcome message |
+| `/status` | Admin | Bot status & health |
+| `/signals` | Admin | Recent generated signals |
+| `/pause` / `/resume` | Admin | Control scanner state |
+| `/why` | Admin | Detailed AI explanation of last signal |
+| `/backtest` | Admin | Run historical strategy simulation |
+| `/optimize` | Admin | Trigger Hybrid RL+GA optimization |
+
+## 🛡 Safety & Risk
+- **Approval Logic**: Mandatory human-in-the-loop for all signal broadcasts by default.
+- **Risk Engine**: Enforces Spread, Volatility, and Liquidity filters before signaling.
+- **Advisory AI**: AI reasoning is intended for decision support and never overrides core risk rules.
+
+## 🧪 Testing
 ```bash
-docker compose up --build
+pytest tests/ -v
 ```
-
-## Safety defaults
-
-- `ENABLE_LIVE_TRADING=false` by default.
-- Startup validation rejects `DEFAULT_MODE=auto_trade_live` unless live trading is explicitly enabled.
-- AI reasoning is advisory only and separate from risk validation.
-- Unsupported timeframes are rejected at startup.
-
-## Remaining production hardening tasks
-
-1. Replace in-memory runtime state with PostgreSQL-backed repositories and transactions.
-2. Implement full Telegram command handlers and callback button approval integration.
-3. Complete requested DB tables (`orders`, `risk_events`, `audit_logs`, `system_logs`, etc.) and migrations.
-4. Integrate real OpenAI embeddings/reasoning with strict timeout budgets and robust fallback behavior.
-5. Add integration tests for end-to-end signal, approval, and paper-trade lifecycle.

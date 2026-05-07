@@ -4,7 +4,7 @@ from pgvector.sqlalchemy import Vector
 from sqlalchemy import JSON, DateTime, Enum, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.enums import SignalDirection, TradeStatus, TradingMode
+from app.core.enums import ApprovalMode, SignalDirection
 from app.db.base import Base
 
 
@@ -18,8 +18,16 @@ class User(Base):
 class BotSetting(Base):
     __tablename__ = "bot_settings"
     id: Mapped[int] = mapped_column(primary_key=True)
-    mode: Mapped[TradingMode] = mapped_column(Enum(TradingMode), default=TradingMode.PAPER_TRADING)
+    execution_mode: Mapped[str] = mapped_column(
+        String(20), default="signal_only"
+    )
+    approval_mode: Mapped[ApprovalMode] = mapped_column(
+        Enum(ApprovalMode), default=ApprovalMode.MANUAL_APPROVAL
+    )
     paused: Mapped[bool] = mapped_column(default=False)
+    symbols: Mapped[list[str]] = mapped_column(JSON, default=list)
+    timeframes: Mapped[list[str]] = mapped_column(JSON, default=list)
+    strategy: Mapped[str] = mapped_column(String(100), default="ema_rsi")
 
 
 class Signal(Base):
@@ -32,36 +40,32 @@ class Signal(Base):
     stop_loss: Mapped[float] = mapped_column(Float)
     take_profit: Mapped[float] = mapped_column(Float)
     confidence: Mapped[float] = mapped_column(Float)
+    order_type: Mapped[str] = mapped_column(String(20), default="LIMIT")
     reason: Mapped[str] = mapped_column(Text)
     ai_explanation: Mapped[str] = mapped_column(Text, default="")
+    atr_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    exchange_id: Mapped[str] = mapped_column(String(32), default="binance", index=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    outcome_status: Mapped[str] = mapped_column(
+        String(20), default="pending", index=True
+    )
+    outcome_pnl_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
+    outcome_max_drawdown_percent: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )
+    outcome_resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
 
 
-class Trade(Base):
-    __tablename__ = "trades"
-    id: Mapped[int] = mapped_column(primary_key=True)
+class PendingApproval(Base):
+    __tablename__ = "pending_approvals"
+    approval_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     signal_id: Mapped[int] = mapped_column(ForeignKey("signals.id"), index=True)
-    symbol: Mapped[str] = mapped_column(String(20), index=True)
-    mode: Mapped[TradingMode] = mapped_column(Enum(TradingMode))
-    status: Mapped[TradeStatus] = mapped_column(Enum(TradeStatus), index=True)
-    quantity: Mapped[float] = mapped_column(Float)
-    entry_price: Mapped[float] = mapped_column(Float)
-    exit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
-    pnl: Mapped[float | None] = mapped_column(Float, nullable=True)
-    metadata_json: Mapped[dict] = mapped_column(JSON, default={})
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
 
-    signal_rel: Mapped[Signal] = relationship()
-
-
-class Position(Base):
-    __tablename__ = "positions"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    trade_id: Mapped[int] = mapped_column(ForeignKey("trades.id"), index=True)
-    symbol: Mapped[str] = mapped_column(String(20), index=True)
-    quantity: Mapped[float] = mapped_column(Float)
-    avg_price: Mapped[float] = mapped_column(Float)
-    status: Mapped[str] = mapped_column(String(20), default="open", index=True)
+    signal: Mapped[Signal] = relationship()
 
 
 class KnowledgeDocument(Base):
@@ -70,16 +74,33 @@ class KnowledgeDocument(Base):
     source_type: Mapped[str] = mapped_column(String(50), index=True)
     title: Mapped[str] = mapped_column(String(200))
     content: Mapped[str] = mapped_column(Text)
-    metadata_json: Mapped[dict] = mapped_column(JSON, default={})
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
+
+from app.db.types import VectorType
 
 class KnowledgeEmbedding(Base):
     __tablename__ = "knowledge_embeddings"
     id: Mapped[int] = mapped_column(primary_key=True)
     document_id: Mapped[int] = mapped_column(ForeignKey("knowledge_documents.id"), index=True)
-    embedding: Mapped[list[float]] = mapped_column(Vector(1536))
+    embedding: Mapped[list[float]] = mapped_column(VectorType(1536))
 
 
-Index("idx_trade_symbol_status", Trade.symbol, Trade.status)
+class BacktestHistory(Base):
+    __tablename__ = "backtest_history"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(20), index=True)
+    strategy: Mapped[str] = mapped_column(String(100), index=True)
+    timeframe: Mapped[str] = mapped_column(String(10))
+    params: Mapped[dict] = mapped_column(JSON, default={})
+    initial_balance: Mapped[float] = mapped_column(Float)
+    final_balance: Mapped[float] = mapped_column(Float)
+    total_trades: Mapped[int] = mapped_column(Integer)
+    win_rate: Mapped[float] = mapped_column(Float)
+    max_drawdown: Mapped[float] = mapped_column(Float)
+    sharpe_ratio: Mapped[float] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
 Index("idx_signal_symbol_timeframe_timestamp", Signal.symbol, Signal.timeframe, Signal.timestamp)

@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from app.core.enums import SignalDirection, TradingMode
+from app.core.enums import ApprovalMode, SignalDirection
 from app.core.state import RuntimeState
 from app.risk_management.engine import RiskEngine
 from app.schemas.signal import SignalContract
@@ -21,7 +21,9 @@ def _signal() -> SignalContract:
 
 
 def test_cooldown_blocks_duplicate_signal() -> None:
-    state = RuntimeState(mode=TradingMode.PAPER_TRADING)
+    state = RuntimeState(
+        approval_mode=ApprovalMode.AUTO,
+    )
     previous = _signal()
     previous.timestamp = datetime.now(timezone.utc) - timedelta(minutes=1)
     state.signals.append(previous)

@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ app_name }} - Advanced Signal Dashboard</title>
+    <meta name="api-auth-enabled" content="{{ 'true' if api_auth_enabled else 'false' }}">
+    <meta name="api-auth-header" content="{{ api_auth_header }}">
+    <meta name="ws-auth-enabled" content="{{ 'true' if ws_auth_enabled else 'false' }}">
+    <link rel="stylesheet" href="/static/css/dashboard.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+</head>
+<body>
+
+<header>
+    <div class="logo">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="color: var(--accent-cyan);"><path d="M12 2L2 7l10 5 10-5-10-5z"></path><path d="M2 17l10 5 10-5"></path><path d="M2 12l10 5 10-5"></path></svg>
+        ANTIGRAVITY SIGNAL BOT
+    </div>
+    <div class="nav-links">
+        <div class="status-badge">
+            <div id="status-pulse" class="dot connected"></div>
+            <span>HYBRID RL+GA ACTIVE</span>
+        </div>
+    </div>
+</header>
+
+<main>
+    <section class="sidebar">
+        <!-- Performance Overview -->
+        <div class="card glass-card">
+            <div class="stat-label">Performance Core</div>
+            <div class="stat-grid">
+                <div class="stat-item">
+                    <span class="stat-label-small">Signals</span>
+                    <span id="stat-total-signals" class="stat-value">{{ summary.total_signals }}</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label-small">Accuracy</span>
+                    <span id="stat-win-rate" class="stat-value up">{{ summary.win_rate }}%</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label-small">Avg Growth</span>
+                    <span id="stat-growth" class="stat-value up">{{ summary.avg_growth }}%</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label-small">Max AE</span>
+                    <span id="stat-max-ae" class="stat-value down">{{ summary.max_ae }}%</span>
+                </div>
+            </div>
+            <div class="card-footer">
+                <span>Signal Success: <strong id="stat-success-count" class="success-text">{{ (summary.win_rate / 100 * summary.total_signals) | round | int }}</strong></span>
+                <span>Sharpe: <strong class="cyan-text">1.95</strong></span>
+            </div>
+        </div>
+
+        <!-- Manual Command Center -->
+        <div class="card glass-card command-card">
+            <div class="stat-label">Command Center</div>
+            <div class="command-group">
+                <button id="btn-pause-resume" class="btn-command {{ 'active' if not state.paused else 'paused' }}">
+                    <div class="btn-icon">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
+                    </div>
+                    <span id="txt-pause-resume">{{ 'PAUSE SESSION' if not state.paused else 'RESUME SESSION' }}</span>
+                </button>
+                <button id="btn-run-all" class="btn-command secondary">
+                    <div class="btn-icon">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                    </div>
+                    <span>RUN SIGNAL CYCLE</span>
+                </button>
+                <button id="btn-global-scan" class="btn-command secondary">
+                    <div class="btn-icon">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                    </div>
+                    <span>GLOBAL ALPHA SCAN</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Hybrid Optimization Card -->
+        <div class="card glass-card engine-card">
+            <div class="stat-header">
+                <div class="stat-label">Hybrid RL+GA Engine</div>
+                <div class="engine-tag">EVOLVING</div>
+            </div>
+            <p class="card-desc">
+                Evolve <strong>{{ state.strategy.upper() }}</strong> using Reinforcement Learning seeds & Genetic Algorithms.
+            </p>
+            
+            <button id="btn-run-optimization" class="btn-run">
+                <div class="btn-icon">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+                </div>
+                <span>Launch Evolution</span>
+            </button>
+            
+            <div id="opt-progress-container" class="opt-progress-container">
+                <div class="opt-progress-bar">
+                    <div id="opt-progress-fill" class="opt-progress-fill"></div>
+                </div>
+                <div id="opt-status-text" class="opt-status-text">Ready for sequence...</div>
+            </div>
+
+            <!-- Optimization Results & Top Performers -->
+            <div id="opt-results" class="results-overlay">
+                <div id="opt-best-params" class="params-box">
+                    <!-- Best params inject here -->
+                </div>
+                <div id="opt-top-performers" class="performers-list">
+                    <!-- Strategy variants inject here -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Evolution Insights (Lessons) -->
+        <div class="card glass-card">
+            <div class="stat-label">Neural Lessons</div>
+            <div id="lesson-stream" class="lesson-stream">
+                <div class="terminal-loader">Waiting for insights...</div>
+            </div>
+        </div>
+    </section>
+
+    <section class="content">
+        <div class="content-header">
+            <div class="stat-label">Live Signal Architecture</div>
+            <div class="badge-live pulse">REAL-TIME STREAMING</div>
+        </div>
+        
+        <div id="pending-approvals" class="approval-header">
+            <!-- Pending approvals inject here -->
+        </div>
+        
+        <div id="signal-list" class="signal-stream">
+            {% for sig in outcomes[:20] %}
+            <div class="card signal-card fade-in {{ sig.signal.lower() }}">
+                <div class="signal-header">
+                    <div class="signal-dir {{ sig.signal.lower() }}">
+                        {% if sig.signal == 'LONG' %}▲{% elif sig.signal == 'SHORT' %}▼{% endif %} {{ sig.signal }}
+                    </div>
+                </div>
+                <div class="signal-info">
+                    <h3>{{ sig.symbol }} <span class="dir-indicator {{ sig.signal.lower() }}"> - {{ sig.signal }}</span> <span>{{ sig.timeframe }}</span></h3>
+                    <div class="trade-metrics-grid">
+                        <div class="metric-box">
+                            <span class="metric-label">ENTRY</span>
+                            <span class="metric-value">{{ "{:,.2f}".format(sig.entry_price) }}</span>
+                        </div>
+                        <div class="metric-box">
+                            <span class="metric-label">CONFIDENCE</span>
+                            <span class="metric-value">{{ "{:.1f}%".format(sig.confidence) }}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+            
+            {% if not outcomes %}
+            <div class="empty-state">
+                Waiting for neural engine to broadcast signals...
+            </div>
+            {% endif %}
+        </div>
+
+        <div id="scanner-results" class="scanner-section" style="display: none; margin-top: 40px; border-top: 1px solid var(--glass-border); padding-top: 20px;">
+            <div class="content-header">
+                <div class="stat-label">Market Alpha Opportunities</div>
+                <div class="badge-live">TOP SCANNED CANDIDATES</div>
+            </div>
+            <div id="scanner-list" class="signal-stream">
+                <!-- Top candidates inject here -->
+            </div>
+        </div>
+    </section>
+</main>
+
+<script src="/static/js/dashboard.js"></script>
+</body>
+</html>

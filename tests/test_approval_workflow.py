@@ -21,13 +21,13 @@ def _signal() -> SignalContract:
 
 
 def test_create_approval_pending() -> None:
-    item = ApprovalWorkflow(timeout_minutes=5).create(_signal())
+    item = ApprovalWorkflow(timeout_seconds=300).create(_signal())
     assert item.status == "pending"
     assert item.approval_id
 
 
 def test_expired_approval_gets_expired_status() -> None:
-    workflow = ApprovalWorkflow(timeout_minutes=5)
+    workflow = ApprovalWorkflow(timeout_seconds=300)
     pending = PendingApproval(
         approval_id="x",
         signal=_signal(),

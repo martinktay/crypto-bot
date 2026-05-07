@@ -13,6 +13,7 @@ from app.db.session import get_db
 from app.schemas.backtest import BacktestRequest, BacktestResult
 from app.schemas.mode import ModeUpdateRequest
 from app.schemas.signal import SignalContract
+from app.optimization.backtester import BacktestService
 from app.services.signal_service import get_pipeline
 from app.strategies.registry import STRATEGIES
 

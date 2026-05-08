@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ app_name }} - Advanced Signal Dashboard</title>
+    <meta name="app-display-name" content="{{ app_name }}">
+    <title>{{ app_name }} · Dashboard</title>
     <meta name="api-auth-enabled" content="{{ 'true' if api_auth_enabled else 'false' }}">
     <meta name="api-auth-header" content="{{ api_auth_header }}">
     <meta name="ws-auth-enabled" content="{{ 'true' if ws_auth_enabled else 'false' }}">
@@ -16,8 +17,8 @@
 
 <header>
     <div class="logo">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="color: var(--accent-cyan);"><path d="M12 2L2 7l10 5 10-5-10-5z"></path><path d="M2 17l10 5 10-5"></path><path d="M2 12l10 5 10-5"></path></svg>
-        ANTIGRAVITY SIGNAL BOT
+        <svg class="logo-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="color: var(--accent-cyan);"><path d="M12 2L2 7l10 5 10-5-10-5z"></path><path d="M2 17l10 5 10-5"></path><path d="M2 12l10 5 10-5"></path></svg>
+        <span class="logo-text">{{ app_name }}</span>
     </div>
     <div class="nav-links">
         <div class="status-badge">

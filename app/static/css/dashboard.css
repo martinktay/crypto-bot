@@ -56,12 +56,19 @@ header {
 }
 
 .logo {
-  font-size: 1.25rem;
-  font-weight: 900;
-  letter-spacing: 1px;
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.logo-icon {
+  flex-shrink: 0;
+}
+
+.logo-text {
+  font-size: 1.25rem;
+  font-weight: 900;
+  letter-spacing: 1px;
   background: linear-gradient(to right, var(--accent-cyan), var(--accent-green));
   -webkit-background-clip: text;
   background-clip: text;

@@ -12,10 +12,12 @@ from telegram import (
 )
 from telegram.ext import ContextTypes
 
+from app.core.config import settings
 from app.db.session import SessionLocal
 from app.db.repository import StateRepository
 from app.services.signal_service import get_pipeline
 from app.telegram_bot.middleware import is_admin, require_admin
+from app.utils.agent_debug_log import agent_debug_log
 
 logger = logging.getLogger(__name__)
 
@@ -61,10 +63,21 @@ def _help_text(is_admin_user: bool) -> str:
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # #region agent log
+    chat = update.effective_chat
     user = update.effective_user
+    agent_debug_log(
+        "handlers.py:start_command",
+        "/start received",
+        "H4",
+        chat_type=chat.type if chat else None,
+        admin_user_id_configured=bool(settings.telegram_admin_user_id),
+        is_admin_user=bool(user and is_admin(user.id)),
+    )
+    # #endregion
     admin = bool(user and is_admin(user.id))
     await update.message.reply_text(
-        "🤖 *Crypto Signal Bot*\n\n"
+        f"🤖 *{settings.app_display_name}*\n\n"
         "I generate trading signals for BTC/USDT and provide AI-powered market insights.\n\n"
         "Use /help to see available commands.",
         parse_mode="Markdown",

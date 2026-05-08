@@ -1,4 +1,4 @@
-/** Advanced Signal Bot Dashboard - Hybrid RL+GA & UI Logic */
+/** Zobo Signal Bot — dashboard UI */
 
 const signalList = document.getElementById('signal-list');
 const statusPulse = document.getElementById('status-pulse');
@@ -11,6 +11,12 @@ function getMeta(name) {
 const API_AUTH_ENABLED = (getMeta('api-auth-enabled') || 'false') === 'true';
 const API_AUTH_HEADER = getMeta('api-auth-header') || 'X-API-Key';
 const WS_AUTH_ENABLED = (getMeta('ws-auth-enabled') || 'false') === 'true';
+
+(function syncBrandingFromServer() {
+    const name = getMeta('app-display-name');
+    if (!name) return;
+    document.title = `${name} · Dashboard`;
+})();
 
 function getApiKey() {
     return localStorage.getItem('API_AUTH_TOKEN') || '';

@@ -32,8 +32,7 @@ async def dashboard(request: Request, db: Session = Depends(get_db)):
             "outcomes": outcomes,
             "backtests": backtests,
             "summary": summary,
-            "app_name": "ANTIGRAVITY"
-            ,
+            "app_name": settings.app_display_name,
             "api_auth_enabled": settings.api_auth_enabled,
             "api_auth_header": settings.api_auth_header,
             "ws_auth_enabled": settings.ws_auth_enabled,
@@ -49,6 +48,7 @@ async def dashboard_data(db: Session = Depends(get_db), _: None = ApiKeyDep):
     summary = repo.get_signal_performance_summary()
     
     return {
+        "app_name": settings.app_display_name,
         "summary": summary,
         "mode": state.approval_mode.value if hasattr(state.approval_mode, 'value') else "signal_only",
         "paused": state.paused,

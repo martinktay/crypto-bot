@@ -24,6 +24,10 @@ models/*.zip
 # IDE
 .vscode/
 .idea/
+.cursor/
+
+# Debug session logs (local)
+debug-*.log
 
 # OS
 .DS_Store

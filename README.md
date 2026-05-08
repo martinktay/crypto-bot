@@ -1,8 +1,12 @@
-# Crypto Telegram Signal Bot
+# Zobo Signal Bot
 
-Production-minded **signal-only** Telegram + FastAPI service: live market data (CCXT), strategy signals, risk checks, optional RAG/LLM explanations, manual approval, web dashboard, and outcome tracking. It does **not** place exchange orders; it records and notifies on signals.
+Production-minded **signal-only** Telegram + FastAPI service marketed as **Zobo Signal Bot**. Live market data (CCXT), strategy signals, risk checks, optional RAG/LLM explanations, manual approval, web dashboard, and outcome tracking.
 
 Official repository: **[github.com/martinktay/crypto-bot](https://github.com/martinktay/crypto-bot)** (`main` branch).
+
+## Branding
+
+The product name defaults to **Zobo Signal Bot**. Override with **`APP_DISPLAY_NAME`** in `.env` if needed.
 
 ## Repository continuity
 
@@ -63,6 +67,7 @@ All variables are documented in **`.env.example`**, including:
 
 | Area | Examples |
 |------|-----------|
+| App | `APP_DISPLAY_NAME` (default **Zobo Signal Bot**) |
 | API | `API_AUTH_ENABLED`, `API_AUTH_HEADER`, `API_AUTH_TOKEN` |
 | WebSocket | `WS_AUTH_ENABLED`, `WS_AUTH_TOKEN` |
 | Database | `DATABASE_URL` (Postgres URL; SQLite possible for dev with weaker vector search) |

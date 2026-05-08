@@ -1,7 +1,7 @@
 [project]
 name = "crypto-telegram-bot"
 version = "0.1.0"
-description = "Production-minded MVP for Telegram crypto signal bot"
+description = "Zobo Signal Bot — Telegram crypto signal service (FastAPI)"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

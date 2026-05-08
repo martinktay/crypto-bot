@@ -5,9 +5,10 @@ from __future__ import annotations
 import logging
 
 from telegram import BotCommand, BotCommandScopeChat, BotCommandScopeDefault
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 
 from app.core.config import settings
+from app.utils.agent_debug_log import agent_debug_log
 
 from app.telegram_bot.handlers import (
     approval_callback,
@@ -30,6 +31,20 @@ from app.telegram_bot.handlers import (
 logger = logging.getLogger(__name__)
 
 _application: Application | None = None
+
+
+async def _telegram_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # #region agent log
+    err = context.error
+    agent_debug_log(
+        "bot.py:_telegram_error_handler",
+        "handler error",
+        "H3",
+        error_type=type(err).__name__ if err else None,
+        error_msg=(str(err)[:400] if err else None),
+        has_update=update is not None,
+    )
+    # #endregion
 
 
 def _public_commands() -> list[BotCommand]:
@@ -93,9 +108,13 @@ async def start_bot(token: str) -> None:
     global _application
     if not token:
         logger.warning("TELEGRAM_BOT_TOKEN not set, skipping bot startup")
+        # #region agent log
+        agent_debug_log("bot.py:start_bot", "skip no token", "H1", skipped=True)
+        # #endregion
         return
 
     _application = Application.builder().token(token).build()
+    _application.add_error_handler(_telegram_error_handler)
 
     # Register command handlers
     _application.add_handler(CommandHandler("start", start_command))
@@ -119,8 +138,23 @@ async def start_bot(token: str) -> None:
     await _application.initialize()
     await _application.start()
     await _register_command_menus(_application)
+    # If this bot had a webhook set (e.g. another host or BotFather test), polling receives nothing.
+    wi = await _application.bot.get_webhook_info()
+    # #region agent log
+    agent_debug_log(
+        "bot.py:start_bot",
+        "webhook info before delete_webhook",
+        "H5",
+        has_webhook_url=bool(wi.url),
+        pending_updates=wi.pending_update_count,
+    )
+    # #endregion
+    await _application.bot.delete_webhook(drop_pending_updates=True)
     await _application.updater.start_polling(drop_pending_updates=True)
     logger.info("Telegram bot started")
+    # #region agent log
+    agent_debug_log("bot.py:start_bot", "polling started", "H2", ok=True)
+    # #endregion
 
 
 async def stop_bot() -> None:

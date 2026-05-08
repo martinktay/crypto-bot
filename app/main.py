@@ -23,6 +23,7 @@ from app.monitoring.metrics import metrics_router
 from app.services.scheduler import start_scheduler, stop_scheduler
 from app.services.signal_service import get_pipeline
 from app.telegram_bot.service import TelegramNotifier
+from app.utils.agent_debug_log import agent_debug_log
 from app.utils.logging import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,13 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage startup and shutdown lifecycle."""
+    # #region agent log
+    agent_debug_log(
+        "main.py:lifespan",
+        "lifespan startup entered",
+        "L0",
+    )
+    # #endregion
     # --- Startup ---
     pipeline = get_pipeline()
     loop = asyncio.get_running_loop()
@@ -72,12 +80,48 @@ async def lifespan(app: FastAPI):
 
     # Start Telegram bot (polling) if token is set
     bot_task = None
+    # #region agent log
+    agent_debug_log(
+        "main.py:lifespan",
+        "telegram startup branch",
+        "H1",
+        has_token=bool(settings.telegram_bot_token),
+    )
+    # #endregion
     if settings.telegram_bot_token:
         from app.telegram_bot.bot import start_bot
 
+        def _log_bot_task_done(t: asyncio.Task) -> None:
+            if t.cancelled():
+                return
+            exc = t.exception()
+            if exc is not None:
+                # #region agent log
+                agent_debug_log(
+                    "main.py:_log_bot_task_done",
+                    "telegram bot task failed",
+                    "H2",
+                    error_type=type(exc).__name__,
+                    error_msg=str(exc)[:400],
+                )
+                # #endregion
+                logger.error(
+                    "Telegram bot task crashed - polling stopped",
+                    exc_info=(type(exc), exc, exc.__traceback__),
+                )
+
         # Run bot in background to avoid blocking lifespan startup
         bot_task = asyncio.create_task(start_bot(settings.telegram_bot_token))
+        bot_task.add_done_callback(_log_bot_task_done)
         logger.info("Telegram bot task created")
+        # #region agent log
+        agent_debug_log(
+            "main.py:lifespan",
+            "telegram bot asyncio task created",
+            "H1",
+            task_created=True,
+        )
+        # #endregion
 
     yield
 
@@ -99,7 +143,7 @@ def create_app() -> FastAPI:
     validate_runtime_settings(settings)
 
     app = FastAPI(
-        title="Crypto Telegram Bot",
+        title=settings.app_display_name,
         version="0.4.0",
         lifespan=lifespan,
     )

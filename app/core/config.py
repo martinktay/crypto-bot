@@ -1,4 +1,4 @@
-from pydantic import Field
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.enums import ApprovalMode
@@ -9,6 +9,7 @@ class Settings(BaseSettings):
 
     # Application
     app_env: str = Field(default="local", alias="APP_ENV")
+    app_display_name: str = Field(default="Zobo Signal Bot", alias="APP_DISPLAY_NAME")
     api_host: str = Field(default="0.0.0.0", alias="API_HOST")
     api_port: int = Field(default=8000, alias="API_PORT")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
@@ -30,11 +31,33 @@ class Settings(BaseSettings):
     ws_auth_enabled: bool = Field(default=False, alias="WS_AUTH_ENABLED")
     ws_auth_token: str = Field(default="", alias="WS_AUTH_TOKEN")
 
-    # Telegram
+    # Telegram — use TELEGRAM_* names below. Legacy: TELEGRAM_CHAT_ID maps to admin DM chat;
+    # TELEGRAM_USER_ID maps to admin user (same as TELEGRAM_ADMIN_USER_ID).
     telegram_bot_token: str = Field(default="", alias="TELEGRAM_BOT_TOKEN")
-    telegram_admin_chat_id: str = Field(default="", alias="TELEGRAM_ADMIN_CHAT_ID")
+    telegram_admin_chat_id: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "TELEGRAM_ADMIN_CHAT_ID",
+            "TELEGRAM_CHAT_ID",
+        ),
+    )
     telegram_group_chat_id: str = Field(default="", alias="TELEGRAM_GROUP_CHAT_ID")
-    telegram_admin_user_id: str = Field(default="", alias="TELEGRAM_ADMIN_USER_ID")
+    telegram_admin_user_id: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "TELEGRAM_ADMIN_USER_ID",
+            "TELEGRAM_USER_ID",
+        ),
+    )
+
+    @model_validator(mode="after")
+    def strip_telegram_secrets(self) -> "Settings":
+        """Trim .env typos (trailing spaces/quotes) that break API calls and admin checks."""
+        self.telegram_bot_token = self.telegram_bot_token.strip()
+        self.telegram_admin_chat_id = self.telegram_admin_chat_id.strip()
+        self.telegram_group_chat_id = self.telegram_group_chat_id.strip()
+        self.telegram_admin_user_id = self.telegram_admin_user_id.strip()
+        return self
 
     # Exchange
     exchange_name: str = Field(default="binance", alias="EXCHANGE_NAME")

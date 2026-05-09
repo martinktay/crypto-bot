@@ -2,9 +2,9 @@ from datetime import datetime
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import JSON, DateTime, Enum, Float, ForeignKey, Index, Integer, String, Text
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core.enums import ApprovalMode, SignalDirection
+from app.core.enums import SignalDirection
 from app.db.base import Base
 
 
@@ -20,9 +20,6 @@ class BotSetting(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     execution_mode: Mapped[str] = mapped_column(
         String(20), default="signal_only"
-    )
-    approval_mode: Mapped[ApprovalMode] = mapped_column(
-        Enum(ApprovalMode), default=ApprovalMode.MANUAL_APPROVAL
     )
     paused: Mapped[bool] = mapped_column(default=False)
     symbols: Mapped[list[str]] = mapped_column(JSON, default=list)
@@ -56,16 +53,6 @@ class Signal(Base):
     outcome_resolved_at: Mapped[datetime | None] = mapped_column(
         DateTime, nullable=True
     )
-
-
-class PendingApproval(Base):
-    __tablename__ = "pending_approvals"
-    approval_id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    signal_id: Mapped[int] = mapped_column(ForeignKey("signals.id"), index=True)
-    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
-    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
-
-    signal: Mapped[Signal] = relationship()
 
 
 class KnowledgeDocument(Base):

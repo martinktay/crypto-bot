@@ -1,4 +1,4 @@
-from app.models.entities import BotSetting, KnowledgeDocument, KnowledgeEmbedding, PendingApproval, Signal, User
+from app.models.entities import BotSetting, KnowledgeDocument, KnowledgeEmbedding, Signal, User
 
 __all__ = [
     "User",
@@ -6,5 +6,4 @@ __all__ = [
     "Signal",
     "KnowledgeDocument",
     "KnowledgeEmbedding",
-    "PendingApproval",
 ]

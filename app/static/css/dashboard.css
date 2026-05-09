@@ -450,6 +450,14 @@ main {
   color: var(--accent-red);
 }
 
+.signal-meta {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    margin: 2px 0 8px;
+    letter-spacing: 0.02em;
+}
+
 .signal-info h3 { font-size: 1.2rem; margin-bottom: 4px; }
 .signal-info h3 span { font-size: 0.8rem; color: var(--text-muted); font-family: var(--font-mono); margin-left:10px; }
 .signal-info p { font-size: 0.9rem; color: var(--text-secondary); }

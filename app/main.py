@@ -60,6 +60,9 @@ async def lifespan(app: FastAPI):
         data: dict[str, Any] = {}
         if "signal" in kwargs:
             data.update(kwargs["signal"].model_dump(mode="json"))
+        sid = kwargs.get("signal_id")
+        if sid is not None:
+            data["signal_id"] = sid
 
         asyncio.run_coroutine_threadsafe(broadcast_signal(event_type, data), loop)
 

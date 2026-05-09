@@ -129,12 +129,14 @@ class StateRepository:
                 success = None
 
             outcomes.append({
+                "signal_id": s.id,
                 "symbol": s.symbol,
                 "timeframe": s.timeframe,
                 "strategy": "N/A",
                 "signal": s.signal.value,
                 "confidence": s.confidence,
                 "order_type": s.order_type,
+                "exchange_id": s.exchange_id,
                 "entry_price": s.entry_price,
                 "stop_loss": s.stop_loss,
                 "take_profit": s.take_profit,

@@ -137,20 +137,45 @@
             <div class="card signal-card fade-in {{ sig.signal.lower() }}">
                 <div class="signal-header">
                     <div class="signal-dir {{ sig.signal.lower() }}">
-                        {% if sig.signal == 'LONG' %}▲{% elif sig.signal == 'SHORT' %}▼{% endif %} {{ sig.signal }}
+                        {% if sig.signal == 'LONG' %}🟢 ▲{% elif sig.signal == 'SHORT' %}🔴 ▼{% else %}🟡 {% endif %}{{ sig.signal }}{% if sig.signal_id %} #{{ '%04d'|format(sig.signal_id) }}{% endif %}
                     </div>
+                    {% if sig.success is not none %}
+                        {% if sig.success %}
+                    <div class="outcome-tag success">▲ {{ "{:.2f}".format(sig.growth_pct or 0.0) }}%</div>
+                        {% elif sig.signal != 'HOLD' %}
+                    <div class="outcome-tag draw">▼ {{ "{:.2f}".format(sig.max_drawdown or 0.0) }}%</div>
+                        {% endif %}
+                    {% endif %}
                 </div>
                 <div class="signal-info">
-                    <h3>{{ sig.symbol }} <span class="dir-indicator {{ sig.signal.lower() }}"> - {{ sig.signal }}</span> <span>{{ sig.timeframe }}</span></h3>
+                    <h3>{{ sig.symbol }}{% if sig.signal != 'HOLD' %} <span class="dir-indicator {{ sig.signal.lower() }}"> — {{ sig.signal }}</span>{% endif %} <span>{{ sig.timeframe }}</span></h3>
+                    <div class="signal-meta">{% if sig.exchange_id %}{{ (sig.exchange_id ~ '')|title }} • {% endif %}{{ sig.timeframe }} • Confidence {{ "{:.1f}%".format(sig.confidence) }}</div>
                     <div class="trade-metrics-grid">
                         <div class="metric-box">
                             <span class="metric-label">ENTRY</span>
                             <span class="metric-value">{{ "{:,.2f}".format(sig.entry_price) }}</span>
                         </div>
                         <div class="metric-box">
+                            <span class="metric-label">TYPE</span>
+                            <span class="metric-value">{{ sig.order_type or 'LIMIT' }}</span>
+                        </div>
+                        <div class="metric-box">
                             <span class="metric-label">CONFIDENCE</span>
                             <span class="metric-value">{{ "{:.1f}%".format(sig.confidence) }}</span>
                         </div>
+                        <div class="metric-box">
+                            <span class="metric-label">TAKE PROFIT</span>
+                            <span class="metric-value success-text">{{ "{:,.2f}".format(sig.take_profit) }}</span>
+                        </div>
+                        <div class="metric-box">
+                            <span class="metric-label">STOP LOSS</span>
+                            <span class="metric-value draw-text">{{ "{:,.2f}".format(sig.stop_loss) }}</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="signal-confidence" style="margin-top: 10px;">
+                    <div class="confidence-bar">
+                        <div class="confidence-fill" style="width: {{ sig.confidence }}%"></div>
                     </div>
                 </div>
             </div>

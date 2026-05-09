@@ -110,22 +110,51 @@ function connectWebSocket() {
     };
 }
 
+function _exchangeLabel(exchangeId) {
+    if (!exchangeId) return '';
+    const s = String(exchangeId);
+    return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+}
+
 function handleNewSignal(signal) {
     const card = document.createElement('div');
     const dirClass = signal.signal.toLowerCase();
     card.className = `card signal-card fade-in ${dirClass}`;
-    
+
     const arrow = signal.signal === 'LONG' ? '▲ ' : (signal.signal === 'SHORT' ? '▼ ' : '');
-    const dirIndicator = signal.signal !== 'HOLD' ? `<span class="dir-indicator ${dirClass}"> - ${signal.signal}</span>` : '';
-    
+    const emoji = signal.signal === 'LONG' ? '🟢' : (signal.signal === 'SHORT' ? '🔴' : '🟡');
+    const dirIndicator = signal.signal !== 'HOLD'
+        ? `<span class="dir-indicator ${dirClass}"> — ${signal.signal}</span>`
+        : '';
+    const sid = signal.signal_id;
+    const callsign = sid != null && sid > 0 ? ` #${String(sid).padStart(4, '0')}` : '';
+
+    const exch = _exchangeLabel(signal.exchange_id);
+    const metaParts = [];
+    if (exch) metaParts.push(exch);
+    metaParts.push(signal.timeframe);
+    metaParts.push(`Confidence ${Number(signal.confidence).toFixed(1)}%`);
+    const metaLine = metaParts.join(' • ');
+
+    let outcomeTag = '';
+    if (typeof signal.success === 'boolean') {
+        if (signal.success) {
+            const g = signal.growth_pct != null ? Number(signal.growth_pct).toFixed(2) : '0.00';
+            outcomeTag = `<div class="outcome-tag success">▲ ${g}%</div>`;
+        } else if (signal.signal !== 'HOLD') {
+            const d = signal.max_drawdown != null ? Number(signal.max_drawdown).toFixed(2) : '0.00';
+            outcomeTag = `<div class="outcome-tag draw">▼ ${d}%</div>`;
+        }
+    }
+
     card.innerHTML = `
         <div class="signal-header">
-            <div class="signal-dir ${dirClass}">${arrow}${signal.signal}</div>
-            ${signal.success ? `<div class="outcome-tag success">▲ ${signal.growth_pct}%</div>` : (signal.signal !== 'HOLD' ? `<div class="outcome-tag draw">▼ ${signal.max_drawdown}%</div>` : '')}
+            <div class="signal-dir ${dirClass}">${emoji} ${arrow}${signal.signal}${callsign}</div>
+            ${outcomeTag}
         </div>
         <div class="signal-info">
             <h3>${signal.symbol}${dirIndicator} <span>${signal.timeframe}</span></h3>
-            
+            <div class="signal-meta">${metaLine}</div>
             <div class="trade-metrics-grid">
                 <div class="metric-box">
                     <span class="metric-label">ENTRY</span>

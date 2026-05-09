@@ -1,3 +1,4 @@
+import os
 from logging.config import fileConfig
 
 from alembic import context
@@ -10,6 +11,20 @@ config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
+
+# Prefer DATABASE_URL from the environment (loaded from .env by the app at runtime,
+# or exported in the shell for one-off `alembic upgrade head` against Neon).
+# Falls back to whatever sqlalchemy.url is set to in alembic.ini.
+_env_db_url = os.environ.get("DATABASE_URL")
+if _env_db_url:
+    # Normalise bare `postgres://`/`postgresql://` to the psycopg v3 driver, since
+    # this project only installs psycopg[binary] (not psycopg2-binary). Neon copy
+    # buttons hand out `postgresql://...` by default, which would otherwise crash.
+    if _env_db_url.startswith("postgres://"):
+        _env_db_url = "postgresql+psycopg://" + _env_db_url[len("postgres://"):]
+    elif _env_db_url.startswith("postgresql://"):
+        _env_db_url = "postgresql+psycopg://" + _env_db_url[len("postgresql://"):]
+    config.set_main_option("sqlalchemy.url", _env_db_url)
 
 target_metadata = Base.metadata
 

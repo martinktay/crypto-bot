@@ -2,10 +2,11 @@ import logging
 
 from app.core.config import Settings
 from app.strategies.registry import STRATEGIES
+from app.utils.timeframes import is_alltime_token
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_TIMEFRAMES = {"5m", "15m", "1h", "4h"}
+SUPPORTED_TIMEFRAMES = {"5m", "15m", "1h", "4h", "1d", "1w", "1M"}
 
 
 def validate_runtime_settings(settings: Settings) -> None:
@@ -19,6 +20,18 @@ def validate_runtime_settings(settings: Settings) -> None:
     unsupported = [tf for tf in settings.timeframe_list if tf not in SUPPORTED_TIMEFRAMES]
     if unsupported:
         raise ValueError(f"Unsupported timeframes: {unsupported}")
+
+    if settings.htf_alignment_enabled and settings.htf_alignment_timeframes.strip():
+        bad_htf = [
+            t
+            for t in settings.htf_alignment_timeframe_list
+            if not is_alltime_token(t) and t not in SUPPORTED_TIMEFRAMES
+        ]
+        if bad_htf:
+            raise ValueError(
+                f"Unsupported HTF_ALIGNMENT_TIMEFRAMES entries: {bad_htf}. "
+                f"Supported: {sorted(SUPPORTED_TIMEFRAMES)} plus all, alltime."
+            )
 
     if settings.strategy not in STRATEGIES:
         raise ValueError(f"Unknown strategy '{settings.strategy}'. Supported: {list(STRATEGIES)}")

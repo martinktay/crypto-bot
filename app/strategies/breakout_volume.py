@@ -6,8 +6,9 @@ import pandas as pd
 from app.core.enums import SignalDirection
 from app.schemas.signal import SignalContract
 from app.strategies.base import Strategy
+from app.utils.candlestick_patterns import gate_for_direction
 from app.utils.candles import candle_close_timestamp
-from app.utils.indicators import higher_timeframe_trend
+from app.utils.indicators import resolve_htf_gate
 
 
 class BreakoutVolumeStrategy(Strategy):
@@ -62,8 +63,7 @@ class BreakoutVolumeStrategy(Strategy):
         atr_value = float(tr.rolling(window=14).mean().iloc[-1])
         sl_distance = atr_value * atr_sl_mult if atr_value > 0 else price * 0.01
 
-        higher_tf_candles = p.get("higher_tf_candles")
-        higher_trend = higher_timeframe_trend(higher_tf_candles) if higher_tf_candles is not None else 0
+        block_long, block_short, trend_label = resolve_htf_gate(p)
 
         breakout_up = (
             prev["close"] <= range_high
@@ -79,12 +79,21 @@ class BreakoutVolumeStrategy(Strategy):
         )
 
         if breakout_up:
-            if higher_trend < 0:
+            if block_long:
                 return self._hold_signal(
                     symbol,
                     timeframe,
                     data,
-                    "Breakout up blocked by higher-TF downtrend",
+                    f"Breakout up blocked by higher-TF downtrend ({trend_label})",
+                    atr_value=atr_value,
+                )
+            blocked, detail, candle_extra = gate_for_direction(data, "LONG")
+            if blocked:
+                return self._hold_signal(
+                    symbol,
+                    timeframe,
+                    data,
+                    f"Breakout up blocked by candlestick pattern ({detail})",
                     atr_value=atr_value,
                 )
             sig = SignalDirection.LONG
@@ -92,12 +101,21 @@ class BreakoutVolumeStrategy(Strategy):
             take = price + sl_distance * tp_r
             reason = "Breakout above range high with volume confirmation"
         elif breakout_down:
-            if higher_trend > 0:
+            if block_short:
                 return self._hold_signal(
                     symbol,
                     timeframe,
                     data,
-                    "Breakdown blocked by higher-TF uptrend",
+                    f"Breakdown blocked by higher-TF uptrend ({trend_label})",
+                    atr_value=atr_value,
+                )
+            blocked, detail, candle_extra = gate_for_direction(data, "SHORT")
+            if blocked:
+                return self._hold_signal(
+                    symbol,
+                    timeframe,
+                    data,
+                    f"Breakdown blocked by candlestick pattern ({detail})",
                     atr_value=atr_value,
                 )
             sig = SignalDirection.SHORT
@@ -109,8 +127,9 @@ class BreakoutVolumeStrategy(Strategy):
                 symbol, timeframe, data, "No breakout", atr_value=atr_value
             )
 
-        trend_label = {1: "HTF up", -1: "HTF down", 0: "HTF n/a"}[higher_trend]
         reason = f"{reason}; {trend_label}"
+        if candle_extra:
+            reason = f"{reason}; {candle_extra}"
 
         confidence = 65.0
 

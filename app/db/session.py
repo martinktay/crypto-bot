@@ -20,7 +20,13 @@ def _normalise_db_url(url: str) -> str:
     return url
 
 
-engine = create_engine(_normalise_db_url(settings.database_url), pool_pre_ping=True)
+# PgBouncer (e.g. Neon pooler) + DDL can invalidate prepared statements and raise
+# "cached plan must not change result type". Disabling server-side prepare avoids it.
+engine = create_engine(
+    _normalise_db_url(settings.database_url),
+    pool_pre_ping=True,
+    connect_args={"prepare_threshold": None},
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 

@@ -1,4 +1,4 @@
-from pydantic import AliasChoices, Field, model_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -126,7 +126,22 @@ class Settings(BaseSettings):
 
     # Trading pairs
     symbols: str = Field(default="BTC/USDT", alias="SYMBOLS")
+    # Comma-separated CCXT timeframes, e.g. 15m,1h,4h or TIMEFRAMES=15,60,240 (normalized to 15m,1h,4h).
     timeframes: str = Field(default="15m", alias="TIMEFRAMES")
+
+    @field_validator("timeframes", mode="before")
+    @classmethod
+    def _normalize_timeframes_string(cls, v: object) -> object:
+        if not isinstance(v, str):
+            return v
+        from app.utils.timeframes import normalize_user_timeframe_token
+
+        parts = [
+            normalize_user_timeframe_token(p)
+            for p in v.split(",")
+            if str(p).strip()
+        ]
+        return ",".join(parts)
 
     # Strategy
     strategy: str = Field(default="ema_rsi", alias="STRATEGY")
@@ -137,7 +152,11 @@ class Settings(BaseSettings):
     rsi_short_threshold: int = Field(default=30, alias="RSI_SHORT_THRESHOLD")
     take_profit_r_multiple: float = Field(default=2.0, alias="TAKE_PROFIT_R_MULTIPLE")
     stop_loss_buffer_percent: float = Field(default=1.0, alias="STOP_LOSS_BUFFER_PERCENT")
-    
+    # Classic OHLC candlestick gates (Bible-style patterns: engulfing, stars, hammer, etc.).
+    # Veto = block entries against a strong opposing pattern; strict = require a confirming pattern.
+    candlestick_patterns_enabled: bool = Field(default=True, alias="CANDLESTICK_PATTERNS_ENABLED")
+    candlestick_patterns_strict: bool = Field(default=False, alias="CANDLESTICK_PATTERNS_STRICT")
+
 
 
     # Scheduling
@@ -146,6 +165,12 @@ class Settings(BaseSettings):
     # When 0 or ≥ len(SYMBOLS), every pair runs each tick (can be slow / rate-limit
     # heavy with large universes). Typical: 50–120 for full Bybit+MEXC USDT lists.
     scan_symbols_batch_size: int = Field(default=80, alias="SCAN_SYMBOLS_BATCH_SIZE")
+    # If true, each app startup updates ``bot_settings`` timeframes + strategy from
+    # ``.env`` when they differ. ``SYMBOLS`` is not changed (use ``resync_symbols.py``).
+    sync_runtime_timeframes_from_env: bool = Field(
+        default=True,
+        alias="SYNC_RUNTIME_TIMEFRAMES_FROM_ENV",
+    )
 
     # Outcome tracking — periodically resolves open broadcast signals against
     # subsequent OHLCV (TP/SL hit, time-stop) and records realized PnL.
@@ -179,6 +204,15 @@ class Settings(BaseSettings):
     higher_timeframe_enabled: bool = Field(default=True, alias="HIGHER_TIMEFRAME_ENABLED")
     # Number of higher-timeframe bars to request — must be > EMA span (200).
     higher_timeframe_lookback: int = Field(default=300, alias="HIGHER_TIMEFRAME_LOOKBACK")
+    # When enabled, fetch each listed TF strictly above the scan's base TF and
+    # require EMA200 alignment on *all* (any bearish TF blocks LONG; any bullish blocks SHORT).
+    # ``all`` / ``alltime`` map to ``1M`` with ``HTF_ALLTIME_LOOKBACK`` (max with HIGHER_TIMEFRAME_LOOKBACK).
+    htf_alignment_timeframes: str = Field(
+        default="1h,4h,1d,1w,1M,all",
+        alias="HTF_ALIGNMENT_TIMEFRAMES",
+    )
+    htf_alignment_enabled: bool = Field(default=True, alias="HTF_ALIGNMENT_ENABLED")
+    htf_alltime_lookback: int = Field(default=500, alias="HTF_ALLTIME_LOOKBACK")
 
     @property
     def symbol_list(self) -> list[str]:
@@ -244,6 +278,16 @@ class Settings(BaseSettings):
 
     def higher_timeframe_for(self, base_tf: str) -> str | None:
         return self.higher_timeframe_pairs.get(base_tf)
+
+    @property
+    def htf_alignment_timeframe_list(self) -> list[str]:
+        if not self.htf_alignment_enabled or not self.htf_alignment_timeframes.strip():
+            return []
+        return [
+            x.strip()
+            for x in self.htf_alignment_timeframes.split(",")
+            if x.strip()
+        ]
 
 
 settings = Settings()  # type: ignore[call-arg]

@@ -7,12 +7,16 @@ from app.core.config import settings
 from app.core.enums import SignalDirection
 from app.schemas.signal import SignalContract
 from app.strategies.base import Strategy
+from app.utils.candlestick_patterns import gate_for_direction
 from app.utils.candles import candle_close_timestamp
-from app.utils.indicators import higher_timeframe_trend
+from app.utils.indicators import resolve_htf_gate
 
 
 class EmaRsiStrategy(Strategy):
     """EMA crossover with RSI momentum filter.
+
+    Optional classic candlestick gates (``CANDLESTICK_PATTERNS_*``) approximate
+    textbook reversal patterns in line with sources like the Candlestick Trading Bible.
 
     A signal fires only on the bar where EMA fast actually *crosses* EMA slow
     (event-based, not regime-based). Stops are derived from ATR so the risk
@@ -88,31 +92,47 @@ class EmaRsiStrategy(Strategy):
         # small percentage so the strategy still produces a usable contract.
         sl_distance = atr_value * atr_sl_mult if atr_value > 0 else price * 0.01
 
-        # Higher-timeframe trend filter (EMA200 on the higher TF).
-        # +1=up, -1=down, 0=unknown/disabled. LONG requires non-bearish trend,
-        # SHORT requires non-bullish trend.
-        higher_tf_candles = (p.get("higher_tf_candles") if isinstance(p, dict) else None)
-        higher_trend = higher_timeframe_trend(higher_tf_candles) if higher_tf_candles is not None else 0
+        # Higher-timeframe alignment: single TF or multi (see resolve_htf_gate).
+        block_long, block_short, trend_label = resolve_htf_gate(p)
+        candle_extra = ""
 
         if cross_up and bullish_momentum:
-            if higher_trend < 0:
+            if block_long:
                 return self._hold_signal(
                     symbol,
                     timeframe,
                     data,
-                    f"LONG cross blocked by higher-TF downtrend (rsi={rsi_value:.1f})",
+                    f"LONG cross blocked by higher-TF downtrend ({trend_label}; rsi={rsi_value:.1f})",
+                    atr_value=atr_value,
+                )
+            blocked, detail, candle_extra = gate_for_direction(data, "LONG")
+            if blocked:
+                return self._hold_signal(
+                    symbol,
+                    timeframe,
+                    data,
+                    f"LONG blocked by candlestick pattern ({detail}; rsi={rsi_value:.1f})",
                     atr_value=atr_value,
                 )
             direction = SignalDirection.LONG
             stop = price - sl_distance
             take = price + sl_distance * tp_mult
         elif cross_down and bearish_momentum:
-            if higher_trend > 0:
+            if block_short:
                 return self._hold_signal(
                     symbol,
                     timeframe,
                     data,
-                    f"SHORT cross blocked by higher-TF uptrend (rsi={rsi_value:.1f})",
+                    f"SHORT cross blocked by higher-TF uptrend ({trend_label}; rsi={rsi_value:.1f})",
+                    atr_value=atr_value,
+                )
+            blocked, detail, candle_extra = gate_for_direction(data, "SHORT")
+            if blocked:
+                return self._hold_signal(
+                    symbol,
+                    timeframe,
+                    data,
+                    f"SHORT blocked by candlestick pattern ({detail}; rsi={rsi_value:.1f})",
                     atr_value=atr_value,
                 )
             direction = SignalDirection.SHORT
@@ -131,12 +151,13 @@ class EmaRsiStrategy(Strategy):
         ema_sep_bps = abs(last["ema_fast"] - last["ema_slow"]) / max(price, 1e-9) * 10000
         confidence = float(min(95.0, max(40.0, ema_sep_bps)))
 
-        trend_label = {1: "HTF up", -1: "HTF down", 0: "HTF n/a"}[higher_trend]
         reason = (
             f"EMA{ema_fast_n}/EMA{ema_slow_n} cross "
             f"({'up' if direction == SignalDirection.LONG else 'down'}) "
             f"with RSI({rsi_period})={rsi_value:.1f}, ATR={atr_value:.2f}, {trend_label}"
         )
+        if candle_extra:
+            reason = f"{reason}; {candle_extra}"
 
         return SignalContract(
             symbol=symbol,

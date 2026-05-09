@@ -46,7 +46,12 @@ async def lifespan(app: FastAPI):
     # Pre-warm settings cache in DB
     try:
         with SessionLocal() as db:
-            StateRepository(db).get_or_create_settings()
+            repo = StateRepository(db)
+            repo.get_or_create_settings()
+            if settings.sync_runtime_timeframes_from_env and repo.sync_timeframes_and_strategy_from_env():
+                logger.info(
+                    "Synced TIMEFRAMES / STRATEGY from .env into bot_settings (SYMBOLS unchanged)."
+                )
     except Exception as exc:
         logger.warning("Failed to initialize database settings on startup: %s", exc)
 

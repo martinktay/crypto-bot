@@ -16,13 +16,27 @@ from app.schemas.signal import SignalContract
 
 logger = logging.getLogger(__name__)
 
-_TELEGRAM_MAX_MESSAGE_LEN = 3800  # leave room for markup/edits; Telegram hard limit is 4096
+_TELEGRAM_MAX_MESSAGE_LEN = 4090  # under Telegram's 4096 ceiling (UTF-16 quirks)
 
 
 def _truncate(text: str, max_len: int = _TELEGRAM_MAX_MESSAGE_LEN) -> str:
     if len(text) <= max_len:
         return text
     return text[: max(0, max_len - 1)] + "…"
+
+
+def _html_italic_chunks(plain: str, max_len: int = _TELEGRAM_MAX_MESSAGE_LEN) -> list[str]:
+    """Split long explanation text into Telegram-sized HTML italic segments."""
+    t = plain.strip()
+    if not t:
+        return []
+    overhead = len("<i></i>")
+    budget = max(256, max_len - overhead)
+    out: list[str] = []
+    for i in range(0, len(t), budget):
+        piece = t[i : i + budget]
+        out.append(f"<i>{html.escape(piece)}</i>")
+    return out
 
 
 def _redact_chat_id(chat_id: str) -> str:
@@ -109,22 +123,24 @@ class TelegramNotifier:
         signal_id: int | None = kwargs.get("signal_id")
 
         if event_type == "signal" and signal and outcome:
-            text = self.build_signal_message(signal, outcome, signal_id=signal_id)
-            # Prefer group/channel; fall back to admin DM so a lone TELEGRAM_CHAT_ID
-            # still receives broadcasts when TELEGRAM_GROUP_CHAT_ID is unset.
+            chunks = self.build_signal_message_chunks(
+                signal, outcome, signal_id=signal_id
+            )
             target_chat = (self.group_chat_id or self.admin_chat_id).strip()
             if not target_chat:
                 logger.warning(
                     "Telegram signal broadcast skipped: set TELEGRAM_GROUP_CHAT_ID and/or "
-                    "TELEGRAM_CHAT_ID (admin) so the bot knows where to post."
+                    "TELEGRAM_CHAT_ID (admin / TELEGRAM_ADMIN_CHAT_ID) so the bot knows where to post."
                 )
                 return
-            self.send_message(text, chat_id=target_chat, parse_mode="HTML")
+            for part in chunks:
+                self.send_message(part, chat_id=target_chat, parse_mode="HTML")
             logger.info(
-                "Signal broadcast dispatched (%s %s → chat %s)",
+                "Signal broadcast dispatched (%s %s → chat %s, parts=%d)",
                 (signal.symbol or "").upper(),
                 signal.signal.value,
                 _redact_chat_id(target_chat),
+                len(chunks),
             )
 
         elif event_type == "signal_insight":
@@ -145,34 +161,26 @@ class TelegramNotifier:
             )
             self.send_message(text, parse_mode="Markdown")
 
-    def build_signal_message(
+    def build_signal_message_chunks(
         self,
         signal: SignalContract,
         outcome: dict | None = None,
         *,
         signal_id: int | None = None,
-    ) -> str:
-        """Build the broadcast signal card.
+    ) -> list[str]:
+        """Build one or more HTML messages for a signal broadcast.
 
-        Each card opens with a unique, glance-able callsign so messages
-        are trivially distinguishable in a busy group chat — the format is
-        ``<emoji> <DIRECTION> #<id> — <SYMBOL>``, e.g.
-        ``🟢 LONG #0042 — BTC/USDT``. The id is the auto-incrementing DB
-        primary key when available, or a deterministic 4-char content
-        hash when the message is built outside the pipeline (e.g. unit
-        tests). The explanation body is rendered as italic prose with no
-        section header — keeping it visually distinct from the data
-        fields without flagging it as machine-generated.
-
-        Rendered with Telegram's HTML parse mode (chosen over Markdown
-        because the explanation can contain raw ``*``/``_``/`` ` ``
-        characters that would otherwise corrupt or be rejected).
+        When the card plus explanation exceeds Telegram's size limit, the
+        first message carries header + entry/levels; following messages
+        carry the explanation (split again if needed).
         """
         _ = outcome  # retained for API compatibility with callers / tests
 
         explanation = (signal.ai_explanation or signal.reason or "").strip()
-        if len(explanation) > 2800:
-            explanation = _truncate(explanation, 2800)
+        # Soft cap so a single-message layout stays likely; hard splitting
+        # below still protects Telegram's API if the model returns a novel.
+        if len(explanation) > 12000:
+            explanation = _truncate(explanation, 12000)
 
         def _level_str(value: float) -> str:
             return f"{float(value):.2f}".rstrip("0").rstrip(".")
@@ -181,23 +189,15 @@ class TelegramNotifier:
         tp_s = _level_str(signal.take_profit)
         sl_s = _level_str(signal.stop_loss)
 
-        # html.escape neutralises &, <, > inside untrusted strings (the
-        # explanation, symbol, and direction enum value) so a stray '<'
-        # in the model output can't open a fake tag and trip Telegram's
-        # parser into rejecting the whole message with HTTP 400.
         symbol_safe = html.escape(signal.symbol)
         direction = signal.signal.value
         direction_safe = html.escape(direction)
-        explanation_safe = html.escape(explanation)
         # Title-case for visual parity with how exchanges brand themselves
-        # ("Binance", "Bybit", "Mexc" rather than the lowercase ccxt id).
         exchange_safe = html.escape((signal.exchange_id or "").title())
 
         callsign = _signal_callsign(signal, signal_id)
         emoji = _direction_emoji(signal.signal)
 
-        # Compact meta line under the callsign. Only include components
-        # that have a meaningful value, separated by middle dots.
         meta_parts: list[str] = []
         if exchange_safe:
             meta_parts.append(exchange_safe)
@@ -205,19 +205,42 @@ class TelegramNotifier:
         meta_parts.append(f"Confidence {signal.confidence:.1f}%")
         meta_line = " • ".join(meta_parts)
 
-        explanation_block = (
-            f"<i>{explanation_safe}</i>\n\n" if explanation_safe else ""
-        )
-
-        msg = (
+        header = (
             f"{emoji} <b>{direction_safe} {callsign}</b> — {symbol_safe}\n"
             f"{meta_line}\n"
-            "\n"
-            f"{explanation_block}"
-            f"Entry: {entry_s}\n"
-            f"TP/SL: {tp_s} / {sl_s}"
         )
-        return _truncate(msg)
+        data_rows = f"Entry: {entry_s}\nTP/SL: {tp_s} / {sl_s}"
+        compact = f"{header}\n{data_rows}"
+
+        if not explanation:
+            return [_truncate(compact)]
+
+        explanation_safe = html.escape(explanation)
+        explanation_block = f"<i>{explanation_safe}</i>\n\n"
+        single = f"{header}\n{explanation_block}{data_rows}"
+        if len(single) <= _TELEGRAM_MAX_MESSAGE_LEN:
+            return [_truncate(single)]
+
+        chunks: list[str] = [_truncate(compact)]
+        chunks.extend(_html_italic_chunks(explanation))
+        return chunks
+
+    def build_signal_message(
+        self,
+        signal: SignalContract,
+        outcome: dict | None = None,
+        *,
+        signal_id: int | None = None,
+    ) -> str:
+        """Build the broadcast signal card (all parts joined for tests / logging).
+
+        See ``build_signal_message_chunks`` for multi-message behaviour.
+        """
+        return "\n".join(
+            self.build_signal_message_chunks(
+                signal, outcome, signal_id=signal_id
+            )
+        )
 
 
 def _direction_emoji(direction: SignalDirection) -> str:

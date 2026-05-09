@@ -116,6 +116,31 @@ class TestNotifyDispatch:
         assert kwargs.get("chat_id") == "999888777"
         assert kwargs.get("parse_mode") == "HTML"
 
+    def test_signal_broadcast_splits_when_explanation_is_long(self) -> None:
+        """Fat AI explanations are sent as follow-up messages so Telegram accepts them."""
+        notifier = TelegramNotifier()
+        notifier.enabled = True
+        notifier.group_chat_id = ""
+        notifier.admin_chat_id = "999888777"
+        notifier.send_message = MagicMock()
+
+        sig = _signal()
+        sig.ai_explanation = "Word. " * 2500
+
+        notifier.notify(
+            "signal",
+            signal=sig,
+            outcome={"signal_status": "Signal Broadcast"},
+            signal_id=7,
+        )
+
+        assert notifier.send_message.call_count >= 2
+        first = notifier.send_message.call_args_list[0][0][0]
+        assert "Entry:" in first
+        assert "TP/SL:" in first
+        second = notifier.send_message.call_args_list[1][0][0]
+        assert second.startswith("<i>")
+
     def test_signal_broadcast_skips_when_no_chat_configured(self) -> None:
         notifier = TelegramNotifier()
         notifier.enabled = True

@@ -90,6 +90,49 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
 
 
+# Telegram text messages: ~4096 chars max (UTF-16 code units in some clients).
+_TELEGRAM_MESSAGE_MAX = 4096
+_TELEGRAM_SAFE_MARGIN = 64
+_SYMBOL_CHUNK_CHARS = 2800
+
+
+def _symbol_list_html_chunks_budgets(
+    symbols: list[str],
+    *,
+    first_max: int,
+    rest_max: int,
+) -> list[str]:
+    """Split symbols into comma-separated HTML-escaped chunks with per-chunk limits."""
+    if not symbols:
+        return []
+    chunks: list[str] = []
+    bucket: list[str] = []
+    running = 0
+    chunk_limit = first_max
+    for s in symbols:
+        piece = html.escape(s)
+        sep_len = 2 if bucket else 0
+        if bucket and running + sep_len + len(piece) > chunk_limit:
+            chunks.append(html.escape(", ".join(bucket)))
+            bucket = [s]
+            running = len(html.escape(s))
+            chunk_limit = rest_max
+        else:
+            bucket.append(s)
+            running += sep_len + len(piece)
+    if bucket:
+        chunks.append(html.escape(", ".join(bucket)))
+    return chunks
+
+
+def _symbol_list_html_chunks(
+    symbols: list[str], *, max_chars: int = _SYMBOL_CHUNK_CHARS
+) -> list[str]:
+    return _symbol_list_html_chunks_budgets(
+        symbols, first_max=max_chars, rest_max=max_chars
+    )
+
+
 # --- Admin commands ---
 
 
@@ -108,20 +151,57 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return
 
-    sym = html.escape(", ".join(state.symbols))
+    n = len(state.symbols)
     tf = html.escape(", ".join(state.timeframes))
     strat = html.escape(state.strategy)
-    text = (
-        "📊 <b>Bot Status</b>\n\n"
-        f"Paused: {'⏸️ Yes' if state.paused else '▶️ No'}\n"
-        f"Strategy: {strat}\n"
-        f"Lessons learned: {lessons} 🧠\n"
-        f"Symbols: {sym}\n"
+    batch = settings.scan_symbols_batch_size
+    batch_note = (
+        f"Scan batch: <b>{batch}</b> symbols/tick (round-robin)"
+        if batch > 0
+        else "Scan batch: <b>all</b> symbols/tick"
+    )
+    footer = (
         f"Timeframes: {tf}\n\n"
         "Alerts: only <b>LONG</b> or <b>SHORT</b> that pass risk checks are posted. "
         "<b>HOLD</b> bars are silent (no trade this bar)."
     )
+    header_top = (
+        "📊 <b>Bot Status</b>\n\n"
+        f"Paused: {'⏸️ Yes' if state.paused else '▶️ No'}\n"
+        f"Strategy: {strat}\n"
+        f"Lessons learned: {lessons} 🧠\n"
+        f"{batch_note}\n"
+    )
+    # First message = header + symbol intro + chunk + footer; reserve using worst-case intro length.
+    worst_sym_intro = f"Symbols ({n}), part 1/999:\n"
+    budget_first = (
+        _TELEGRAM_MESSAGE_MAX
+        - _TELEGRAM_SAFE_MARGIN
+        - len(header_top)
+        - len(worst_sym_intro)
+        - len(footer)
+    )
+    budget_first = max(400, min(2_600, budget_first))
+    follow_prefix = f"📊 <b>Symbols</b> ({n}) part 99/99\n"
+    budget_follow = _TELEGRAM_MESSAGE_MAX - _TELEGRAM_SAFE_MARGIN - len(follow_prefix)
+    budget_follow = max(400, min(3_800, budget_follow))
+
+    sym_chunks = _symbol_list_html_chunks_budgets(
+        state.symbols,
+        first_max=budget_first,
+        rest_max=budget_follow,
+    )
+    sym_intro = (
+        f"Symbols ({n}), part 1/{len(sym_chunks)}:\n"
+        if len(sym_chunks) > 1
+        else f"Symbols ({n}):\n"
+    )
+    body0 = sym_chunks[0] if sym_chunks else html.escape("(none)")
+    text = f"{header_top}{sym_intro}{body0}\n{footer}"
     await update.message.reply_text(text, parse_mode="HTML")
+    for i, chunk in enumerate(sym_chunks[1:], start=2):
+        part = f"📊 <b>Symbols</b> ({n}) part {i}/{len(sym_chunks)}\n{chunk}"
+        await update.message.reply_text(part, parse_mode="HTML")
 
 
 def _level_str(value: float) -> str:

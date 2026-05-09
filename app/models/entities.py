@@ -30,7 +30,7 @@ class BotSetting(Base):
 class Signal(Base):
     __tablename__ = "signals"
     id: Mapped[int] = mapped_column(primary_key=True)
-    symbol: Mapped[str] = mapped_column(String(20), index=True)
+    symbol: Mapped[str] = mapped_column(String(80), index=True)
     timeframe: Mapped[str] = mapped_column(String(10), index=True)
     signal: Mapped[SignalDirection] = mapped_column(Enum(SignalDirection), index=True)
     entry_price: Mapped[float] = mapped_column(Float)
@@ -77,7 +77,7 @@ class KnowledgeEmbedding(Base):
 class BacktestHistory(Base):
     __tablename__ = "backtest_history"
     id: Mapped[int] = mapped_column(primary_key=True)
-    symbol: Mapped[str] = mapped_column(String(20), index=True)
+    symbol: Mapped[str] = mapped_column(String(80), index=True)
     strategy: Mapped[str] = mapped_column(String(100), index=True)
     timeframe: Mapped[str] = mapped_column(String(10))
     params: Mapped[dict] = mapped_column(JSON, default={})

@@ -4,6 +4,7 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+from app.core.config import settings
 from app.models import entities  # noqa: F401
 from app.db.base import Base
 
@@ -12,10 +13,9 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Prefer DATABASE_URL from the environment (loaded from .env by the app at runtime,
-# or exported in the shell for one-off `alembic upgrade head` against Neon).
-# Falls back to whatever sqlalchemy.url is set to in alembic.ini.
-_env_db_url = os.environ.get("DATABASE_URL")
+# Prefer an explicit shell `DATABASE_URL`, then the same value the app loads from `.env`
+# via `Settings` (Alembic does not load `.env` on its own). Finally use `alembic.ini`.
+_env_db_url = os.environ.get("DATABASE_URL") or settings.database_url
 if _env_db_url:
     # Normalise bare `postgres://`/`postgresql://` to the psycopg v3 driver, since
     # this project only installs psycopg[binary] (not psycopg2-binary). Neon copy

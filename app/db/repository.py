@@ -36,6 +36,31 @@ class StateRepository:
             self.db.refresh(setting)
         return setting
 
+    def sync_timeframes_and_strategy_from_env(self) -> bool:
+        """Align DB ``timeframes`` + ``strategy`` with :mod:`app.core.config` (.env).
+
+        Returns ``True`` if a row was updated. Does not modify ``symbols``.
+        """
+        from app.core.config import settings
+        from app.models.entities import BotSetting
+
+        row = self.db.execute(select(BotSetting).limit(1)).scalar_one_or_none()
+        if row is None:
+            return False
+        target_tfs = list(settings.timeframe_list)
+        target_strat = settings.strategy
+        changed = False
+        if list(row.timeframes) != target_tfs:
+            row.timeframes = target_tfs
+            changed = True
+        if row.strategy != target_strat:
+            row.strategy = target_strat
+            changed = True
+        if changed:
+            self.db.commit()
+            self.db.refresh(row)
+        return changed
+
     def get_runtime_state_snapshot(self) -> RuntimeState:
         """Hydrate a pure RuntimeState DTO from database rows."""
         setting = self.get_or_create_settings()

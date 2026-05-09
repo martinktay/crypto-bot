@@ -18,6 +18,11 @@ from app.risk_management.engine import RiskEngine
 from app.schemas.signal import SignalContract
 from app.strategies.registry import build_strategy
 from app.services.tradingagents_review import TradingAgentsReviewer
+from app.utils.timeframes import (
+    is_alltime_token,
+    normalize_alignment_timeframe,
+    timeframe_to_minutes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -120,10 +125,14 @@ class SignalPipeline:
                 if df.empty:
                     continue
 
-                higher_tf_df = self._fetch_higher_tf(qualified, timeframe)
                 strategy_params: dict[str, Any] = {}
-                if higher_tf_df is not None:
-                    strategy_params["higher_tf_candles"] = higher_tf_df
+                multi_htf = self._fetch_multi_htf_alignment(qualified, timeframe)
+                if multi_htf:
+                    strategy_params["multi_htf_candles"] = multi_htf
+                else:
+                    higher_tf_df = self._fetch_higher_tf(qualified, timeframe)
+                    if higher_tf_df is not None:
+                        strategy_params["higher_tf_candles"] = higher_tf_df
 
                 signal = strategy.generate(symbol, timeframe, df, strategy_params or None)
                 signal.exchange_id = exchange_id
@@ -266,6 +275,58 @@ class SignalPipeline:
             f"{signal.reason}; sentiment opposing ({score:+.2f}, n={n_posts})"
         )
         return signal
+
+    def _fetch_multi_htf_alignment(
+        self, symbol: str, base_timeframe: str
+    ) -> dict[str, pd.DataFrame]:
+        """Closed-candle OHLCV per higher TF for EMA200 alignment (see ``resolve_htf_gate``)."""
+        if not settings.htf_alignment_enabled:
+            return {}
+        tokens = settings.htf_alignment_timeframe_list
+        if not tokens:
+            return {}
+        base_m = timeframe_to_minutes(base_timeframe)
+        if base_m is None:
+            return {}
+        planned: dict[str, int] = {}
+        for tok in tokens:
+            ccxt_tf = normalize_alignment_timeframe(tok)
+            if not ccxt_tf:
+                continue
+            tf_m = timeframe_to_minutes(ccxt_tf)
+            if tf_m is None or tf_m <= base_m:
+                continue
+            if is_alltime_token(tok):
+                lim = max(
+                    settings.higher_timeframe_lookback,
+                    settings.htf_alltime_lookback,
+                )
+            else:
+                lim = settings.higher_timeframe_lookback
+            prev = planned.get(ccxt_tf)
+            planned[ccxt_tf] = max(prev or 0, lim)
+        out: dict[str, pd.DataFrame] = {}
+        for ccxt_tf, limit in planned.items():
+            try:
+                raw = self.market_data.fetch_ohlcv(symbol, ccxt_tf, limit=limit)
+            except Exception as exc:
+                logger.warning(
+                    "MTF alignment fetch failed (%s %s): %s",
+                    symbol,
+                    ccxt_tf,
+                    exc.__class__.__name__,
+                )
+                continue
+            if not raw:
+                continue
+            htf_df = pd.DataFrame(
+                raw, columns=["ts", "open", "high", "low", "close", "volume"]
+            )
+            if len(htf_df) > 1:
+                htf_df = htf_df.iloc[:-1].reset_index(drop=True)
+            if not htf_df.empty:
+                out[ccxt_tf] = htf_df
+        return out
 
     def _fetch_higher_tf(self, symbol: str, base_timeframe: str) -> pd.DataFrame | None:
         """Fetch higher-timeframe candles for trend confirmation.

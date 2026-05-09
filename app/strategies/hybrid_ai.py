@@ -10,8 +10,9 @@ from app.core.enums import SignalDirection
 from app.optimization.rl_service import RLService
 from app.schemas.signal import SignalContract
 from app.strategies.base import Strategy
+from app.utils.candlestick_patterns import gate_for_direction
 from app.utils.candles import candle_close_timestamp
-from app.utils.indicators import higher_timeframe_trend
+from app.utils.indicators import resolve_htf_gate
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,7 @@ class HybridAIStrategy(Strategy):
     risk engine and outcome tracker see consistent geometry. The RL policy
     only picks direction — it does **not** rewrite numeric risk levels.
     Higher-timeframe trend (EMA200) filters trades when
-    ``params['higher_tf_candles']`` is provided by the pipeline.
+    ``params['higher_tf_candles']`` or ``params['multi_htf_candles']`` is provided by the pipeline.
     """
 
     name = "hybrid_ai"
@@ -96,20 +97,25 @@ class HybridAIStrategy(Strategy):
         tp_mult = float(p.get("take_profit_r_multiple", settings.take_profit_r_multiple))
         sl_distance = atr_value * atr_sl_mult if atr_value > 0 else price * 0.01
 
-        higher_tf = p.get("higher_tf_candles")
-        higher_trend = (
-            higher_timeframe_trend(higher_tf) if higher_tf is not None else 0
-        )
-        trend_bits = {1: "HTF up", -1: "HTF down", 0: "HTF n/a"}[higher_trend]
+        block_long, block_short, trend_bits = resolve_htf_gate(p)
 
         if direction == SignalDirection.LONG:
-            if higher_trend < 0:
+            if block_long:
                 return self._hold_signal(
                     symbol,
                     timeframe,
                     candles,
                     df,
                     f"RL LONG blocked by higher-TF downtrend; {trend_bits}",
+                )
+            blocked, detail, candle_extra = gate_for_direction(df, "LONG")
+            if blocked:
+                return self._hold_signal(
+                    symbol,
+                    timeframe,
+                    candles,
+                    df,
+                    f"RL LONG blocked by candlestick ({detail}); {trend_bits}",
                 )
             stop = price - sl_distance
             take = price + sl_distance * tp_mult
@@ -126,13 +132,22 @@ class HybridAIStrategy(Strategy):
                 )
             )
         elif direction == SignalDirection.SHORT:
-            if higher_trend > 0:
+            if block_short:
                 return self._hold_signal(
                     symbol,
                     timeframe,
                     candles,
                     df,
                     f"RL SHORT blocked by higher-TF uptrend; {trend_bits}",
+                )
+            blocked, detail, candle_extra = gate_for_direction(df, "SHORT")
+            if blocked:
+                return self._hold_signal(
+                    symbol,
+                    timeframe,
+                    candles,
+                    df,
+                    f"RL SHORT blocked by candlestick ({detail}); {trend_bits}",
                 )
             stop = price + sl_distance
             take = price - sl_distance * tp_mult
@@ -157,6 +172,8 @@ class HybridAIStrategy(Strategy):
             f"RL direction action={direction.value} (policy={action}); "
             f"ATR SL×{atr_sl_mult:.1f}, R={tp_mult:.1f}x; {trend_bits}"
         )
+        if candle_extra:
+            reason = f"{reason}; {candle_extra}"
 
         return SignalContract(
             symbol=symbol,

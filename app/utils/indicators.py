@@ -142,3 +142,37 @@ def higher_timeframe_trend(
     if last_close < ema:
         return -1
     return 0
+
+
+def resolve_htf_gate(
+    params: dict | None, *, ema_span: int = 200
+) -> tuple[bool, bool, str]:
+    """Higher-timeframe alignment for strategies (single or multi).
+
+    - ``multi_htf_candles``: map of TF → OHLCV dataframe. LONG is blocked if any
+      TF has trend ``-1``; SHORT is blocked if any TF has trend ``+1``. Unknown
+      (``0``) does not block.
+    - Else ``higher_tf_candles``: legacy single higher TF (same rules as one series).
+
+    Returns ``(block_long, block_short, label)`` for reasons / logging.
+    """
+    p = params or {}
+    multi = p.get("multi_htf_candles")
+    if isinstance(multi, dict) and len(multi) > 0:
+        votes: dict[str, int] = {}
+        for tf_name, df in sorted(multi.items()):
+            votes[str(tf_name)] = higher_timeframe_trend(df, ema_span)
+        block_long = any(v == -1 for v in votes.values())
+        block_short = any(v == 1 for v in votes.values())
+        glyphs = []
+        for tf_name, v in sorted(votes.items()):
+            ch = "~" if v == 0 else ("↑" if v > 0 else "↓")
+            glyphs.append(f"{tf_name}{ch}")
+        label = "MTF " + " ".join(glyphs)
+        return block_long, block_short, label
+    single = p.get("higher_tf_candles")
+    tr = higher_timeframe_trend(single, ema_span) if single is not None else 0
+    block_long = tr < 0
+    block_short = tr > 0
+    trend_label = {1: "HTF up", -1: "HTF down", 0: "HTF n/a"}[tr]
+    return block_long, block_short, trend_label

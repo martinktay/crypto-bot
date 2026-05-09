@@ -55,18 +55,12 @@ async def lifespan(app: FastAPI):
     
     def unified_notify(event_type: str, **kwargs: Any):
         """Bridge sync callbacks to Telegram and WebSockets."""
-        # 1. Telegram (Sync)
         notifier.notify(event_type, **kwargs)
-        
-        # 2. WebSocket (Async Bridge)
-        # Extract serializable data
-        data = {}
+
+        data: dict[str, Any] = {}
         if "signal" in kwargs:
             data.update(kwargs["signal"].model_dump(mode="json"))
-        if "approval_id" in kwargs:
-            data["approval_id"] = kwargs["approval_id"]
-             
-        # Schedule the async broadcast on the main event loop
+
         asyncio.run_coroutine_threadsafe(broadcast_signal(event_type, data), loop)
 
     pipeline.set_notifier(unified_notify)

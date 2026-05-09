@@ -6,9 +6,8 @@ from typing import Any, Callable
 import pandas as pd
 from sqlalchemy.orm import Session
 
-from app.approval_workflow.service import ApprovalWorkflow
 from app.core.config import settings
-from app.core.enums import ApprovalMode, SignalDirection
+from app.core.enums import SignalDirection
 from app.db.repository import StateRepository
 from app.knowledge_base.embeddings import EmbeddingProvider
 from app.knowledge_base.reasoning import ReasoningEngine
@@ -29,7 +28,6 @@ class SignalPipeline:
         self.risk_engine = RiskEngine()
         self.reasoning_engine = ReasoningEngine()
         self.embedder = EmbeddingProvider()
-        self.approval_workflow = ApprovalWorkflow()
         self.reviewer = TradingAgentsReviewer()
         self.sentiment = get_sentiment_provider()
         self._notifier: Callable[..., Any] | None = None
@@ -78,8 +76,8 @@ class SignalPipeline:
 
                 # AI explanation + RAG retrieval are skipped for HOLD signals when
                 # SKIP_REASONING_ON_HOLD is enabled (default). HOLD signals are
-                # never broadcast and never approved, so the explanation is dead
-                # weight that costs a chat-completion + an embedding call.
+                # never broadcast, so the explanation would be dead weight that
+                # costs a chat-completion + an embedding call.
                 context_string = ""
                 ai_explanation = ""
                 should_explain = not (
@@ -154,106 +152,24 @@ class SignalPipeline:
                         outcome["agent_gate"] = gate_reason
                         outcome["signal_status"] = f"rejected_by_agent: {gate_reason}"
 
-                if not is_approved:
-                    outcome["signal_status"] = f"rejected: {risk_note}; {limits_note}"
-                    logger.info("Signal rejected for %s: %s", symbol, outcome["signal_status"])
-                    self._notify("rejection", signal=signal, outcome={
-                        "risk_note": risk_note,
-                        "limits_note": limits_note,
-                        **({ "agent_gate": outcome.get("agent_gate") } if outcome.get("agent_gate") else {}),
-                    }, state=state)
-                elif (
-                    state.approval_mode == ApprovalMode.MANUAL_APPROVAL
-                    and signal.signal != SignalDirection.HOLD
-                ):
-                    # Manual approval workflow disabled for Telegram broadcast:
-                    # emit the signal immediately without creating approvals.
-                    outcome["signal_status"] = "Signal Broadcast"
-                    self._notify("signal", signal=signal, outcome=outcome, state=state)
-                else:
-                    outcome["signal_status"] = "Signal Recorded"
-                    self._notify("signal", signal=signal, outcome=outcome, state=state)
+                # HOLD is the normal "no trade this bar" state — no channels, no "rejection".
+                if signal.signal == SignalDirection.HOLD:
+                    outcome["signal_status"] = "hold"
+                    outcomes.append(outcome)
+                    continue
 
+                if not is_approved:
+                    if not str(outcome.get("signal_status", "")).startswith("rejected_by_agent"):
+                        outcome["signal_status"] = f"rejected: {risk_note}; {limits_note}"
+                    logger.info("Signal filtered for %s: %s", symbol, outcome["signal_status"])
+                    outcomes.append(outcome)
+                    continue
+
+                outcome["signal_status"] = "Signal Broadcast"
+                self._notify("signal", signal=signal, outcome=outcome, state=state)
                 outcomes.append(outcome)
 
         return outcomes
-
-    def apply_approval_decision(
-        self, db: Session, approval_id: str, approved: bool
-    ) -> dict:
-        repo = StateRepository(db)
-        pending = repo.get_pending_approval(approval_id)
-
-        if pending is None:
-            return {"result": "not_found"}
-
-        if pending.status != "pending":
-            return {
-                "result": "not_pending",
-                "status": pending.status,
-                "approval_id": approval_id,
-            }
-
-        decision = self.approval_workflow.decide(pending, approved)
-        affected = repo.resolve_approval(approval_id, decision.status)
-        if affected == 0:
-            return {
-                "result": "not_pending",
-                "status": "race",
-                "approval_id": approval_id,
-            }
-
-        try:
-            from app.monitoring.metrics import approval_decisions
-
-            approval_decisions.labels(status=decision.status).inc()
-        except Exception:
-            pass
-
-        if decision.status == "approved":
-            drift_pct = self._broadcast_drift_pct(decision.signal)
-            max_drift = settings.max_broadcast_drift_percent
-
-            if drift_pct is not None and drift_pct > max_drift:
-                logger.warning(
-                    "Approved signal %s rejected at broadcast: drift %.2f%% > %.2f%%",
-                    approval_id,
-                    drift_pct,
-                    max_drift,
-                )
-                self._notify(
-                    "rejection",
-                    signal=decision.signal,
-                    outcome={
-                        "risk_note": (
-                            f"Stale at approval (price moved {drift_pct:.2f}% "
-                            f"vs strategy entry; max {max_drift:.2f}%)"
-                        ),
-                        "limits_note": "broadcast_drift_guard",
-                    },
-                )
-                return {
-                    "result": "stale",
-                    "approval_id": approval_id,
-                    "drift_percent": drift_pct,
-                }
-
-            outcome = {
-                "symbol": decision.signal.symbol,
-                "timeframe": decision.signal.timeframe,
-                "signal": decision.signal.signal.value,
-                "signal_status": "Approved & Broadcast",
-                "risk_note": "Risk validated by Admin",
-            }
-            if drift_pct is not None:
-                outcome["price_drift_percent"] = round(drift_pct, 3)
-            self._notify("signal", signal=decision.signal, outcome=outcome)
-        
-        return {
-            "result": decision.status,
-            "approval_id": approval_id,
-            "trade": decision.signal.model_dump(mode="json"),
-        }
 
     def _apply_sentiment(self, signal: SignalContract) -> SignalContract:
         """Down-weight confidence when news sentiment opposes the signal.
@@ -318,24 +234,6 @@ class SignalPipeline:
         if len(htf_df) > 1:
             htf_df = htf_df.iloc[:-1].reset_index(drop=True)
         return htf_df if not htf_df.empty else None
-
-    def _broadcast_drift_pct(self, signal: Any) -> float | None:
-        """Return |live - entry| / entry * 100 in percent, or None on failure."""
-        try:
-            ticker = self.market_data.fetch_ticker(signal.symbol)
-            last = (
-                ticker.get("last")
-                or ticker.get("close")
-                or ticker.get("info", {}).get("lastPrice")
-            )
-            if last is None or signal.entry_price in (None, 0):
-                return None
-            return abs(float(last) - float(signal.entry_price)) / float(signal.entry_price) * 100.0
-        except Exception as exc:
-            logger.warning(
-                "Drift check failed for %s: %s", signal.symbol, exc.__class__.__name__
-            )
-            return None
 
     def _notify(self, event_type: str, **kwargs: Any) -> None:
         if self._notifier:

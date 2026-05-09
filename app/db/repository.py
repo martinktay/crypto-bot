@@ -9,11 +9,9 @@ logger = logging.getLogger(__name__)
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, select
 
-from app.core.config import settings
-from app.core.enums import ApprovalMode, SignalDirection
-from app.core.state import PendingApproval as PendingApprovalContract
+from app.core.enums import SignalDirection
 from app.core.state import RuntimeState
-from app.models.entities import BotSetting, PendingApproval, Signal
+from app.models.entities import BotSetting, Signal
 from app.schemas.signal import SignalContract
 
 
@@ -22,11 +20,12 @@ class StateRepository:
         self.db = db
 
     def get_or_create_settings(self) -> BotSetting:
+        from app.core.config import settings
+
         setting = self.db.execute(select(BotSetting).limit(1)).scalar_one_or_none()
         if not setting:
             setting = BotSetting(
                 execution_mode="signal_only",
-                approval_mode=settings.approval_mode,
                 paused=False,
                 symbols=settings.symbol_list,
                 timeframes=settings.timeframe_list,
@@ -41,7 +40,6 @@ class StateRepository:
         """Hydrate a pure RuntimeState DTO from database rows."""
         setting = self.get_or_create_settings()
 
-        # Load recent signals
         raw_signals = self.db.execute(
             select(Signal).order_by(desc(Signal.timestamp)).limit(10)
         ).scalars().all()
@@ -61,41 +59,13 @@ class StateRepository:
             for s in raw_signals
         ]
 
-        # Load active approvals
-        raw_approvals = self.db.execute(
-            select(PendingApproval, Signal)
-            .join(Signal, PendingApproval.signal_id == Signal.id)
-            .where(PendingApproval.status == "pending")
-        ).all()
-        approvals = {}
-        for apprv, sig in raw_approvals:
-            approvals[apprv.approval_id] = PendingApprovalContract(
-                approval_id=apprv.approval_id,
-                expires_at=apprv.expires_at.replace(tzinfo=timezone.utc),
-                status=apprv.status,
-                signal=SignalContract(
-                    symbol=sig.symbol,
-                    timeframe=sig.timeframe,
-                    signal=sig.signal,
-                    entry_price=sig.entry_price,
-                    stop_loss=sig.stop_loss,
-                    take_profit=sig.take_profit,
-                    confidence=sig.confidence,
-                    order_type=sig.order_type,
-                    reason=sig.reason,
-                    timestamp=sig.timestamp.replace(tzinfo=timezone.utc),
-                )
-            )
-
         return RuntimeState(
-            approval_mode=setting.approval_mode,
             paused=setting.paused,
             symbols=list(setting.symbols),
             timeframes=list(setting.timeframes),
             strategy=setting.strategy,
             execution_mode=setting.execution_mode,
             signals=signals,
-            approvals=approvals,
             recent_outcomes=[],
         )
 
@@ -120,66 +90,8 @@ class StateRepository:
         self.db.commit()
         return sig.id
 
-    def create_pending_approval(self, approval_id: str, signal_id: int, expires_at: datetime) -> None:
-        apprv = PendingApproval(
-            approval_id=approval_id,
-            signal_id=signal_id,
-            expires_at=expires_at.replace(tzinfo=None),
-            status="pending"
-        )
-        self.db.add(apprv)
-        self.db.commit()
-
-    def get_pending_approval(self, approval_id: str) -> PendingApprovalContract | None:
-        row = self.db.execute(
-            select(PendingApproval, Signal)
-            .join(Signal, PendingApproval.signal_id == Signal.id)
-            .where(PendingApproval.approval_id == approval_id)
-        ).first()
-
-        if not row:
-            return None
-
-        apprv, sig = row
-        return PendingApprovalContract(
-            approval_id=apprv.approval_id,
-            expires_at=apprv.expires_at.replace(tzinfo=timezone.utc),
-            status=apprv.status,
-            signal=SignalContract(
-                symbol=sig.symbol,
-                timeframe=sig.timeframe,
-                signal=sig.signal,
-                entry_price=sig.entry_price,
-                stop_loss=sig.stop_loss,
-                take_profit=sig.take_profit,
-                confidence=sig.confidence,
-                order_type=sig.order_type,
-                reason=sig.reason,
-                timestamp=sig.timestamp.replace(tzinfo=timezone.utc),
-            )
-        )
-
-    def resolve_approval(self, approval_id: str, status: str) -> int:
-        """Atomically transition a pending approval to a terminal status.
-
-        Only rows where ``status == 'pending'`` are updated. Returns the
-        number of affected rows so callers can detect replays.
-        """
-        affected = (
-            self.db.query(PendingApproval)
-            .filter(
-                PendingApproval.approval_id == approval_id,
-                PendingApproval.status == "pending",
-            )
-            .update({"status": status})
-        )
-        self.db.commit()
-        return int(affected)
-
-    def update_mode(self, approval_mode: ApprovalMode | None = None, paused: bool | None = None) -> None:
+    def update_mode(self, paused: bool | None = None) -> None:
         setting = self.get_or_create_settings()
-        if approval_mode:
-            setting.approval_mode = approval_mode
         if paused is not None:
             setting.paused = paused
         self.db.commit()
@@ -240,23 +152,15 @@ class StateRepository:
         return outcomes
 
     def list_open_broadcast_signals(self, max_age_hours: int) -> list[Signal]:
-        """Return non-HOLD signals whose outcome is still ``pending``.
-
-        Excludes signals whose linked approval was *rejected* (those were
-        never broadcast so realized PnL is meaningless).
-        """
+        """Return non-HOLD signals whose outcome is still ``pending``."""
         from datetime import timedelta
 
         cutoff = datetime.utcnow() - timedelta(hours=max_age_hours)
-        rejected_signal_ids = select(PendingApproval.signal_id).where(
-            PendingApproval.status == "rejected"
-        )
         rows = self.db.execute(
             select(Signal)
             .where(Signal.signal != SignalDirection.HOLD)
             .where(Signal.outcome_status == "pending")
             .where(Signal.timestamp >= cutoff)
-            .where(Signal.id.not_in(rejected_signal_ids))
             .order_by(Signal.timestamp)
         ).scalars().all()
         return list(rows)
@@ -493,27 +397,26 @@ class StateRepository:
         )
 
     def get_rejected_signals(self, limit: int = 5) -> list[dict]:
-        """Fetch signals that were generated but not attached to an approval."""
-        from app.models.entities import PendingApproval
-        
-        # Signals that are NOT HOLD and have no PendingApproval
-        sub_apprv = select(PendingApproval.signal_id)
-        
+        """Fetch recent non-HOLD signals that risk-engine filtered out.
+
+        Filtered = recorded with a non-broadcast outcome status (currently we
+        only store ``pending`` / TP-SL outcomes, so this returns recent
+        non-HOLD signals as a best-effort filter view).
+        """
         rows = self.db.execute(
             select(Signal)
             .where(Signal.signal != SignalDirection.HOLD)
-            .where(Signal.id.not_in(sub_apprv))
             .order_by(desc(Signal.timestamp))
             .limit(limit)
         ).scalars().all()
-        
+
         return [
             {
                 "symbol": s.symbol,
                 "timeframe": s.timeframe,
                 "signal": s.signal.value,
                 "reason": s.reason,
-                "timestamp": s.timestamp
+                "timestamp": s.timestamp,
             }
             for s in rows
         ]

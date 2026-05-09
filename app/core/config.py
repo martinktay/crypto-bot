@@ -1,8 +1,6 @@
 from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app.core.enums import ApprovalMode
-
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -68,13 +66,8 @@ class Settings(BaseSettings):
     exchange_market_type: str = Field(default="swap", alias="EXCHANGE_MARKET_TYPE")
     # Maximum tolerated drift between the closed-bar price the strategy used and
     # the live ticker at the moment of broadcast (in percent). Above this, the
-    # signal is rejected at approval time.
+    # signal is filtered out and not broadcast.
     max_broadcast_drift_percent: float = Field(default=0.75, alias="MAX_BROADCAST_DRIFT_PERCENT")
-
-    # Signal settings
-    approval_mode: ApprovalMode = Field(
-        default=ApprovalMode.MANUAL_APPROVAL, alias="APPROVAL_MODE"
-    )
 
     # Risk management
     signal_cooldown_minutes: int = Field(default=45, alias="SIGNAL_COOLDOWN_MINUTES")
@@ -107,7 +100,7 @@ class Settings(BaseSettings):
     tradingagents_reasoning_effort: str = Field(default="medium", alias="TRADINGAGENTS_REASONING_EFFORT")
     # A: Add critique/score to explanations
     tradingagents_mode_a_enabled: bool = Field(default=False, alias="TRADINGAGENTS_MODE_A_ENABLED")
-    # B: Auto-gate (approve/reject) before manual approval/broadcast
+    # B: Auto-gate (approve/reject) before broadcast
     tradingagents_mode_b_enabled: bool = Field(default=False, alias="TRADINGAGENTS_MODE_B_ENABLED")
     tradingagents_gate_min_score: float = Field(default=65.0, alias="TRADINGAGENTS_GATE_MIN_SCORE")
 
@@ -127,8 +120,7 @@ class Settings(BaseSettings):
     
 
 
-    # Approval & scheduling
-    manual_approval_timeout_seconds: int = Field(default=300, alias="MANUAL_APPROVAL_TIMEOUT_SECONDS")
+    # Scheduling
     scan_interval_seconds: int = Field(default=300, alias="SCAN_INTERVAL_SECONDS")
 
     # Outcome tracking — periodically resolves open broadcast signals against

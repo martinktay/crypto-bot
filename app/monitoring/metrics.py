@@ -14,11 +14,6 @@ notifications_failed = Counter(
     "Notification deliveries that failed",
     ["kind"],
 )
-approval_decisions = Counter(
-    "approval_decisions_total",
-    "Approval decisions resolved",
-    ["status"],
-)
 
 
 @metrics_router.get("/metrics")

@@ -132,10 +132,6 @@
             <div class="badge-live pulse">REAL-TIME STREAMING</div>
         </div>
         
-        <div id="pending-approvals" class="approval-header">
-            <!-- Pending approvals inject here -->
-        </div>
-        
         <div id="signal-list" class="signal-stream">
             {% for sig in outcomes[:20] %}
             <div class="card signal-card fade-in {{ sig.signal.lower() }}">

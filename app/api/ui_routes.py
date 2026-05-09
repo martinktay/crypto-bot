@@ -50,7 +50,7 @@ async def dashboard_data(db: Session = Depends(get_db), _: None = ApiKeyDep):
     return {
         "app_name": settings.app_display_name,
         "summary": summary,
-        "mode": state.approval_mode.value if hasattr(state.approval_mode, 'value') else "signal_only",
+        "execution_mode": state.execution_mode,
         "paused": state.paused,
         "recent_signals": outcomes[:10]
     }

@@ -97,9 +97,6 @@ function connectWebSocket() {
             case 'optimization_complete':
                 handleOptimizationComplete(payload.data);
                 break;
-            case 'approval_needed':
-                handleApprovalNeeded(payload.data);
-                break;
             case 'status_update':
                 updateStatus(payload.data);
                 break;
@@ -162,86 +159,6 @@ function handleNewSignal(signal) {
     signalList.insertBefore(card, signalList.firstChild);
     if (signalList.children.length > 20) {
         signalList.removeChild(signalList.lastChild);
-    }
-}
-
-function handleApprovalNeeded(approval) {
-    const container = document.getElementById('pending-approvals');
-    if (!container) return;
-
-    const card = document.createElement('div');
-    card.id = `approval-${approval.approval_id}`;
-    card.className = 'card approval-card fade-in';
-    
-    // Check if it already exists
-    if (document.getElementById(card.id)) return;
-
-    card.innerHTML = `
-        <div class="stat-label" style="color: var(--accent-gold)">Action Required: Pending Signal</div>
-        <div class="signal-info">
-            <h3 style="margin-bottom: 10px;">${approval.signal.symbol} <span>${approval.signal.timeframe}</span></h3>
-            <div class="trade-metrics-grid" style="background: rgba(255, 204, 0, 0.05); border-color: rgba(255, 204, 0, 0.2)">
-                <div class="metric-box">
-                    <span class="metric-label">SIGNAL</span>
-                    <span class="metric-value" style="color: ${approval.signal.signal === 'LONG' ? 'var(--accent-green)' : 'var(--accent-red)'}">${approval.signal.signal}</span>
-                </div>
-                <div class="metric-box">
-                    <span class="metric-label">ENTRY</span>
-                    <span class="metric-value">${approval.signal.entry_price.toFixed(2)}</span>
-                </div>
-                <div class="metric-box">
-                    <span class="metric-label">CONFIDENCE</span>
-                    <span class="metric-value">${approval.signal.confidence.toFixed(1)}%</span>
-                </div>
-            </div>
-        </div>
-        <div class="approval-actions">
-            <button class="btn-reject" onclick="handleApprovalDecision('${approval.approval_id}', false)">Reject</button>
-            <button class="btn-approve" onclick="handleApprovalDecision('${approval.approval_id}', true)">Approve Signal</button>
-        </div>
-    `;
-    
-    container.appendChild(card);
-}
-
-async function handleApprovalDecision(id, approved) {
-    const btn = event.target;
-    btn.disabled = true;
-    btn.innerText = approved ? 'Approving...' : 'Rejecting...';
-
-    try {
-        const resp = await apiFetch(`/approvals/${id}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ approved })
-        });
-        const result = await resp.json();
-        if (result.status === 'success' || result.result === 'ok') {
-            const card = document.getElementById(`approval-${id}`);
-            if (card) {
-                card.style.opacity = '0';
-                card.style.transform = 'scale(0.95)';
-                setTimeout(() => card.remove(), 400);
-            }
-        }
-    } catch (err) {
-        console.error("Approval decision failed:", err);
-        btn.disabled = false;
-        btn.innerText = approved ? 'Approve Signal' : 'Reject';
-    }
-}
-
-async function fetchApprovals() {
-    try {
-        const resp = await apiFetch('/approvals');
-        const data = await resp.json();
-        const container = document.getElementById('pending-approvals');
-            data.forEach(app => handleApprovalNeeded({
-                approval_id: app.approval_id,
-                signal: app.signal
-            }));
-    } catch (err) {
-        console.error("Approvals fetch failed:", err);
     }
 }
 
@@ -371,8 +288,7 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Poll status every 30s
     setInterval(fetchStatus, 30000);
-    fetchApprovals();
-    
+
     // Command Center Listeners
     const btnPause = document.getElementById('btn-pause-resume');
     const txtPause = document.getElementById('txt-pause-resume');

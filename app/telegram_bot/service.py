@@ -78,22 +78,10 @@ class TelegramNotifier:
         """Notification callback for SignalPipeline."""
         signal: SignalContract | None = kwargs.get("signal")
         outcome: dict | None = kwargs.get("outcome")
-        approval_id: str | None = kwargs.get("approval_id")
 
-        if event_type == "approval_needed" and signal and approval_id:
-            # Manual approval UI is disabled: send the same signal message without buttons.
-            text = self.build_signal_message(signal, outcome)
-            self.send_message(text, chat_id=self.admin_chat_id)
-
-        elif event_type == "signal" and signal and outcome:
-            # Send to GROUP for broadcast
+        if event_type == "signal" and signal and outcome:
             text = self.build_signal_message(signal, outcome)
             self.send_message(text, chat_id=self.group_chat_id)
-
-        elif event_type == "rejection" and signal and outcome:
-            # Send to ADMIN for feedback
-            text = self.build_rejection_message(signal, outcome)
-            self.send_message(text, chat_id=self.admin_chat_id)
 
         elif event_type == "signal_insight":
             symbol = kwargs.get("symbol", "Unknown")
@@ -139,19 +127,3 @@ class TelegramNotifier:
             f"TP/SL: {tp_s} / {sl_s}"
         )
         return _truncate(msg)
-
-    def build_rejection_message(self, signal: SignalContract, outcome: dict) -> str:
-        # Match the simple Telegram "rejection card" format (no buttons, no rich Markdown).
-        risk_note = str(outcome.get("risk_note", "N/A"))
-        limits_note = str(outcome.get("limits_note", "N/A"))
-        reason = str(signal.reason or "").strip()
-        return _truncate(
-            "⚠️ SIGNAL REJECTED\n"
-            f"Pair: {signal.symbol}\n"
-            f"Timeframe: {signal.timeframe}\n"
-            f"Signal: {signal.signal.value}\n"
-            f"Reason: {reason}\n"
-            "\n"
-            f"Risk: {risk_note}\n"
-            f"Limits: {limits_note}"
-        )

@@ -2,16 +2,13 @@ from datetime import datetime, timezone
 import logging
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
 from app.core.security import ApiKeyDep
 from app.core.enums import SignalDirection
 from app.db.repository import StateRepository
 from app.db.session import get_db
 from app.schemas.backtest import BacktestRequest, BacktestResult
-from app.schemas.mode import ModeUpdateRequest
 from app.schemas.signal import SignalContract
 from app.optimization.backtester import BacktestService
 from app.services.signal_service import get_pipeline
@@ -19,10 +16,6 @@ from app.strategies.registry import STRATEGIES
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-
-
-class ApprovalDecision(BaseModel):
-    approved: bool
 
 
 @router.get("/health")
@@ -35,9 +28,8 @@ def status(db: Session = Depends(get_db), _: None = ApiKeyDep) -> dict:
     repo = StateRepository(db)
     state = repo.get_runtime_state_snapshot()
     summary = repo.get_signal_performance_summary()
-    
+
     return {
-        "approval_mode": state.approval_mode.value,
         "paused": state.paused,
         "symbols": state.symbols,
         "timeframes": state.timeframes,
@@ -116,19 +108,6 @@ def run_signal_cycle(db: Session = Depends(get_db), _: None = ApiKeyDep) -> dict
 
 
 
-@router.post("/mode")
-def set_mode(payload: ModeUpdateRequest, db: Session = Depends(get_db), _: None = ApiKeyDep) -> dict[str, str]:
-    repo = StateRepository(db)
-    repo.update_mode(approval_mode=payload.approval_mode)
-    
-    # fetch updated
-    state = repo.get_runtime_state_snapshot()
-    return {
-        "result": "mode updated",
-        "approval_mode": state.approval_mode.value,
-    }
-
-
 @router.post("/symbols")
 def set_symbols(payload: list[str], db: Session = Depends(get_db), _: None = ApiKeyDep) -> dict[str, list[str]]:
     StateRepository(db).update_symbols_timeframes_strategy(symbols=payload)
@@ -142,26 +121,6 @@ def set_strategy(payload: dict, db: Session = Depends(get_db), _: None = ApiKeyD
         return {"result": "rejected", "supported": list(STRATEGIES)}
     StateRepository(db).update_symbols_timeframes_strategy(strategy=strategy_name)
     return {"strategy": strategy_name}
-
-
-@router.get("/approvals")
-def list_approvals(db: Session = Depends(get_db), _: None = ApiKeyDep) -> list[dict]:
-    state = StateRepository(db).get_runtime_state_snapshot()
-    return [
-        {
-            "approval_id": item.approval_id,
-            "status": item.status,
-            "expires_at": item.expires_at.isoformat(),
-            "signal": item.signal.model_dump(mode="json"),
-        }
-        for item in state.approvals.values()
-    ]
-
-
-@router.post("/approvals/{approval_id}")
-def decide_approval(approval_id: str, payload: ApprovalDecision, db: Session = Depends(get_db), _: None = ApiKeyDep) -> dict:
-    pipeline = get_pipeline()
-    return pipeline.apply_approval_decision(db, approval_id, payload.approved)
 
 
 @router.post("/pause")

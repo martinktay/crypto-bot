@@ -5,13 +5,12 @@ from __future__ import annotations
 import logging
 
 from telegram import BotCommand, BotCommandScopeChat, BotCommandScopeDefault
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, ContextTypes
 
 from app.core.config import settings
 from app.utils.agent_debug_log import agent_debug_log
 
 from app.telegram_bot.handlers import (
-    approval_callback,
     balance_command,
     backtest_command,
     help_command,
@@ -131,9 +130,6 @@ async def start_bot(token: str) -> None:
     _application.add_handler(CommandHandler("backtest", backtest_command))
     _application.add_handler(CommandHandler("rejected", rejected_command))
     _application.add_handler(CommandHandler("optimize", optimize_command))
-
-    # Register callback handler for approval buttons
-    _application.add_handler(CallbackQueryHandler(approval_callback))
 
     await _application.initialize()
     await _application.start()

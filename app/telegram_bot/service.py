@@ -22,18 +22,6 @@ def _truncate(text: str, max_len: int = _TELEGRAM_MAX_MESSAGE_LEN) -> str:
     return text[: max(0, max_len - 1)] + "…"
 
 
-def _md_escape(text: str) -> str:
-    """
-    Escape Telegram Markdown (legacy) special characters in user/LLM-provided text.
-
-    We keep using parse_mode="Markdown" for compatibility with current formatting.
-    """
-    # Telegram's legacy Markdown is quirky; this conservative escape prevents most breakage.
-    for ch in ("_", "*", "`", "["):
-        text = text.replace(ch, f"\\{ch}")
-    return text
-
-
 class TelegramNotifier:
     """Sends Telegram messages synchronously using the Bot HTTP API.
 
@@ -49,7 +37,14 @@ class TelegramNotifier:
         if self.enabled:
             self.url = f"https://api.telegram.org/bot{self.token}/sendMessage"
 
-    def send_message(self, text: str, chat_id: str | None = None, reply_markup: dict | None = None) -> None:
+    def send_message(
+        self,
+        text: str,
+        chat_id: str | None = None,
+        reply_markup: dict | None = None,
+        *,
+        parse_mode: str | None = None,
+    ) -> None:
         """Send a message to a specific chat (defaults to admin)."""
         target_id = chat_id or self.admin_chat_id
         if not self.enabled or not target_id:
@@ -57,8 +52,9 @@ class TelegramNotifier:
         payload: dict[str, Any] = {
             "chat_id": target_id,
             "text": _truncate(text),
-            "parse_mode": "Markdown",
         }
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
         if reply_markup:
             payload["reply_markup"] = json.dumps(reply_markup)
         try:
@@ -85,18 +81,9 @@ class TelegramNotifier:
         approval_id: str | None = kwargs.get("approval_id")
 
         if event_type == "approval_needed" and signal and approval_id:
-            # Send to ADMIN only
+            # Manual approval UI is disabled: send the same signal message without buttons.
             text = self.build_signal_message(signal, outcome)
-            text += f"\n\n⏳ *ADMIN REVIEW REQUIRED* (`{approval_id[:8]}...`)"
-            markup = {
-                "inline_keyboard": [
-                    [
-                        {"text": "✅ Approve & Broadcast", "callback_data": f"approve:{approval_id}"},
-                        {"text": "❌ Reject", "callback_data": f"reject:{approval_id}"},
-                    ]
-                ]
-            }
-            self.send_message(text, chat_id=self.admin_chat_id, reply_markup=markup)
+            self.send_message(text, chat_id=self.admin_chat_id)
 
         elif event_type == "signal" and signal and outcome:
             # Send to GROUP for broadcast
@@ -124,74 +111,47 @@ class TelegramNotifier:
                 f"Virtual ROI: `{roi_pct:.2f}%`"
                 f"\nDuration: `{int(duration // 60)} mins`"
             )
-            self.send_message(text)
+            self.send_message(text, parse_mode="Markdown")
 
     def build_signal_message(self, signal: SignalContract, outcome: dict | None = None) -> str:
-        """Build a professional, data-dense signal message for Telegram."""
-        dir_emoji = (
-            "🟢"
-            if signal.signal.value == "LONG"
-            else "🔴"
-            if signal.signal.value == "SHORT"
-            else "⚪"
-        )
-        status_line = (outcome or {}).get("signal_status") or "Processed"
+        """Build the broadcast signal card (plain text — matches product template)."""
+        _ = outcome  # retained for API compatibility with callers / tests
+        explanation = (signal.ai_explanation or signal.reason or "").strip()
+        if len(explanation) > 2800:
+            explanation = _truncate(explanation, 2800)
 
-        # Compute RR if prices are sensible
-        rr: float | None = None
-        per_unit_risk = abs(signal.entry_price - signal.stop_loss)
-        per_unit_reward = abs(signal.take_profit - signal.entry_price)
-        if per_unit_risk > 0:
-            rr = per_unit_reward / per_unit_risk
+        def _level_str(value: float) -> str:
+            return f"{float(value):.2f}".rstrip("0").rstrip(".")
 
-        # Escape free-text to avoid Markdown breakage / spoofing.
-        reason = _md_escape(signal.reason or "")
-        explanation = _md_escape(signal.ai_explanation or "")
-        if len(explanation) > 900:
-            explanation = _truncate(explanation, 900)
-
-        ts = signal.timestamp.isoformat(timespec="seconds")
-        atr_line = (
-            f"\n• ATR: `{signal.atr_value:,.2f}`"
-            if signal.atr_value is not None
-            else ""
-        )
-        rr_line = f"\n• RR: `{rr:.2f}`" if rr is not None else ""
+        entry_s = _level_str(signal.entry_price)
+        tp_s = _level_str(signal.take_profit)
+        sl_s = _level_str(signal.stop_loss)
 
         msg = (
-            f"💎 *TRADE SIGNAL*  `{signal.symbol}`\n"
-            f"Timeframe: `{signal.timeframe}`  |  Type: `{signal.order_type}`\n"
-            f"Timestamp: `{ts}`\n"
+            "🚨 NEW SIGNAL\n"
+            f"Result: {signal.signal.value} for {signal.symbol}\n"
+            f"Confidence: {signal.confidence:.1f}%\n"
             "\n"
-            f"*Direction*: `{signal.signal.value}` {dir_emoji}\n"
-            f"*Confidence*: `{signal.confidence:.1f}%`\n"
+            "🧠 AI INSIGHT\n"
+            f"{explanation}\n"
             "\n"
-            "*Levels*\n"
-            f"• Entry: `{signal.entry_price:,.2f}`\n"
-            f"• Take Profit: `{signal.take_profit:,.2f}`\n"
-            f"• Stop Loss: `{signal.stop_loss:,.2f}`"
-            f"{rr_line}"
-            f"{atr_line}\n"
-            "\n"
-            f"*Setup*\n_{reason}_\n"
-            "\n"
-            f"*AI rationale (advisory)*\n_{explanation}_\n"
-            "\n"
-            f"*Status*: { _md_escape(str(status_line)) }"
+            f"Entry: {entry_s}\n"
+            f"TP/SL: {tp_s} / {sl_s}"
         )
-
         return _truncate(msg)
 
     def build_rejection_message(self, signal: SignalContract, outcome: dict) -> str:
-        risk_note = _md_escape(str(outcome.get("risk_note", "N/A")))
-        limits_note = _md_escape(str(outcome.get("limits_note", "N/A")))
+        # Match the simple Telegram "rejection card" format (no buttons, no rich Markdown).
+        risk_note = str(outcome.get("risk_note", "N/A"))
+        limits_note = str(outcome.get("limits_note", "N/A"))
+        reason = str(signal.reason or "").strip()
         return _truncate(
-            "⚠️ *SIGNAL REJECTED*\n"
-            f"Pair: `{signal.symbol}`\n"
-            f"Timeframe: `{signal.timeframe}`\n"
-            f"Signal: `{signal.signal.value}`\n"
-            f"Reason: _{_md_escape(signal.reason or '')}_\n"
+            "⚠️ SIGNAL REJECTED\n"
+            f"Pair: {signal.symbol}\n"
+            f"Timeframe: {signal.timeframe}\n"
+            f"Signal: {signal.signal.value}\n"
+            f"Reason: {reason}\n"
             "\n"
-            f"Risk: _{risk_note}_\n"
-            f"Limits: _{limits_note}_"
+            f"Risk: {risk_note}\n"
+            f"Limits: {limits_note}"
         )

@@ -166,18 +166,10 @@ class SignalPipeline:
                     state.approval_mode == ApprovalMode.MANUAL_APPROVAL
                     and signal.signal != SignalDirection.HOLD
                 ):
-                    pending = self.approval_workflow.create(signal)
-                    repo.create_pending_approval(pending.approval_id, signal_id, pending.expires_at)
-                    
-                    outcome["approval_id"] = pending.approval_id
-                    outcome["signal_status"] = "waiting_manual_approval"
-                    self._notify(
-                        "approval_needed",
-                        signal=signal,
-                        approval_id=pending.approval_id,
-                        outcome=outcome,
-                        state=state,
-                    )
+                    # Manual approval workflow disabled for Telegram broadcast:
+                    # emit the signal immediately without creating approvals.
+                    outcome["signal_status"] = "Signal Broadcast"
+                    self._notify("signal", signal=signal, outcome=outcome, state=state)
                 else:
                     outcome["signal_status"] = "Signal Recorded"
                     self._notify("signal", signal=signal, outcome=outcome, state=state)

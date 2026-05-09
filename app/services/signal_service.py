@@ -185,7 +185,14 @@ class SignalPipeline:
                     continue
 
                 outcome["signal_status"] = "Signal Broadcast"
-                self._notify("signal", signal=signal, outcome=outcome, state=state)
+                outcome["signal_id"] = signal_id
+                self._notify(
+                    "signal",
+                    signal=signal,
+                    outcome=outcome,
+                    state=state,
+                    signal_id=signal_id,
+                )
                 outcomes.append(outcome)
 
         return outcomes

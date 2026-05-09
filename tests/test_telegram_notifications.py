@@ -26,17 +26,37 @@ def _signal() -> SignalContract:
 
 class TestMessageFormatting:
     def test_signal_message_contains_required_fields(self) -> None:
+        """Card uses the unique-callsign header and never announces 'AI'."""
         notifier = TelegramNotifier()
-        msg = notifier.build_signal_message(_signal(), {"signal_status": "Signal Recorded 📝"})
-        assert "NEW SIGNAL" in msg
-        assert "Result: LONG for BTC/USDT" in msg
-        assert "🧠 AI INSIGHT" in msg
+        msg = notifier.build_signal_message(
+            _signal(),
+            {"signal_status": "Signal Recorded 📝"},
+            signal_id=42,
+        )
+        # New header format: emoji DIRECTION #id — SYMBOL
+        assert "🟢" in msg
+        assert "<b>LONG #0042</b>" in msg
+        assert "BTC/USDT" in msg
+        # AI labels removed.
+        assert "AI INSIGHT" not in msg
+        assert "NEW SIGNAL" not in msg
+        # Body and data rows still rendered.
         assert "EMA crossover bullish" in msg
-        assert "85.0%" in msg
-        assert "LONG" in msg
+        assert "Confidence 85.0%" in msg
+        assert "15m" in msg
         assert "Entry:" in msg
         assert "TP/SL:" in msg
         assert "64000 / 58000" in msg
+
+    def test_signal_message_callsign_falls_back_to_content_hash(self) -> None:
+        """Without a DB id, the callsign is a 4-char content hash so two
+        distinct signals still render as visually distinct messages."""
+        notifier = TelegramNotifier()
+        msg = notifier.build_signal_message(_signal())
+        import re
+
+        match = re.search(r"<b>LONG #([0-9A-F]{4})</b>", msg)
+        assert match, f"expected hash callsign, got: {msg!r}"
 
     def test_rejection_notify_does_not_send_telegram(self) -> None:
         """Risk rejections are not pushed to Telegram (signal-only product)."""

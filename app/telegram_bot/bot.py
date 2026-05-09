@@ -154,13 +154,27 @@ async def start_bot(token: str) -> None:
 
 
 async def stop_bot() -> None:
-    """Stop the Telegram bot."""
+    """Stop the Telegram bot.
+
+    Each teardown step is best-effort: if startup aborted before polling
+    began (e.g. uvicorn failed to bind its socket), the updater / Application
+    will not be in a "running" state and python-telegram-bot raises
+    ``RuntimeError("This Updater is not running!")``. Swallowing those keeps
+    the *real* startup error visible in the lifespan traceback instead of
+    being masked by a noisy shutdown failure.
+    """
     global _application
     if _application is None:
         return
-    await _application.updater.stop()
-    await _application.stop()
-    await _application.shutdown()
+    for step_name, coro_factory in (
+        ("updater.stop", lambda: _application.updater.stop()),
+        ("application.stop", lambda: _application.stop()),
+        ("application.shutdown", lambda: _application.shutdown()),
+    ):
+        try:
+            await coro_factory()
+        except RuntimeError as exc:
+            logger.debug("Telegram bot %s skipped: %s", step_name, exc)
     _application = None
     logger.info("Telegram bot stopped")
 

@@ -105,7 +105,9 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             f"Strategy: `{state.strategy}`\n"
             f"Lessons Learned: `{lessons}` 🧠\n"
             f"Symbols: {', '.join(state.symbols)}\n"
-            f"Timeframes: {', '.join(state.timeframes)}\n",
+            f"Timeframes: {', '.join(state.timeframes)}\n\n"
+            "Alerts: only *LONG* or *SHORT* that pass risk checks are posted. "
+            "*HOLD* bars are silent (no trade this bar).",
             parse_mode="Markdown",
         )
 

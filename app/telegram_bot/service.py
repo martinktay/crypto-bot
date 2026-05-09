@@ -25,6 +25,14 @@ def _truncate(text: str, max_len: int = _TELEGRAM_MAX_MESSAGE_LEN) -> str:
     return text[: max(0, max_len - 1)] + "…"
 
 
+def _redact_chat_id(chat_id: str) -> str:
+    """Avoid dumping full chat IDs into logs while keeping support correlation."""
+    s = str(chat_id).strip()
+    if len(s) <= 4:
+        return "(short id)"
+    return f"…{s[-4:]}"
+
+
 class TelegramNotifier:
     """Sends Telegram messages synchronously using the Bot HTTP API.
 
@@ -66,16 +74,33 @@ class TelegramNotifier:
                 from app.monitoring.metrics import notifications_failed
 
                 notifications_failed.labels(kind="telegram").inc()
+                detail = resp.text[:500]
+                try:
+                    body = resp.json()
+                    if isinstance(body, dict) and body.get("description"):
+                        detail = str(body["description"])
+                except (ValueError, TypeError, AttributeError):
+                    pass
                 logger.warning(
-                    "Telegram send failed to %s (status=%s)",
-                    target_id,
+                    "Telegram send failed to %s (status=%s): %s",
+                    _redact_chat_id(str(target_id)),
                     resp.status_code,
+                    detail,
+                )
+            else:
+                logger.debug(
+                    "Telegram message sent OK (chat %s)",
+                    _redact_chat_id(str(target_id)),
                 )
         except Exception as exc:
             from app.monitoring.metrics import notifications_failed
 
             notifications_failed.labels(kind="telegram").inc()
-            logger.error("Telegram send error: %s", exc.__class__.__name__)
+            logger.error(
+                "Telegram send error to %s: %s",
+                _redact_chat_id(str(target_id)),
+                exc.__class__.__name__,
+            )
 
     def notify(self, event_type: str, **kwargs: Any) -> None:
         """Notification callback for SignalPipeline."""
@@ -85,7 +110,22 @@ class TelegramNotifier:
 
         if event_type == "signal" and signal and outcome:
             text = self.build_signal_message(signal, outcome, signal_id=signal_id)
-            self.send_message(text, chat_id=self.group_chat_id, parse_mode="HTML")
+            # Prefer group/channel; fall back to admin DM so a lone TELEGRAM_CHAT_ID
+            # still receives broadcasts when TELEGRAM_GROUP_CHAT_ID is unset.
+            target_chat = (self.group_chat_id or self.admin_chat_id).strip()
+            if not target_chat:
+                logger.warning(
+                    "Telegram signal broadcast skipped: set TELEGRAM_GROUP_CHAT_ID and/or "
+                    "TELEGRAM_CHAT_ID (admin) so the bot knows where to post."
+                )
+                return
+            self.send_message(text, chat_id=target_chat, parse_mode="HTML")
+            logger.info(
+                "Signal broadcast dispatched (%s %s → chat %s)",
+                (signal.symbol or "").upper(),
+                signal.signal.value,
+                _redact_chat_id(target_chat),
+            )
 
         elif event_type == "signal_insight":
             symbol = kwargs.get("symbol", "Unknown")

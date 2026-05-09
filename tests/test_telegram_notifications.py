@@ -96,6 +96,42 @@ class TestNotifyDispatch:
         assert "8.33%" in text
         assert "60 mins" in text
 
+    def test_signal_broadcast_uses_admin_chat_when_group_unset(self) -> None:
+        """Broadcasts fall back to TELEGRAM_CHAT_ID when group is empty."""
+        notifier = TelegramNotifier()
+        notifier.enabled = True
+        notifier.group_chat_id = ""
+        notifier.admin_chat_id = "999888777"
+        notifier.send_message = MagicMock()
+
+        notifier.notify(
+            "signal",
+            signal=_signal(),
+            outcome={"signal_status": "Signal Broadcast"},
+            signal_id=7,
+        )
+
+        notifier.send_message.assert_called_once()
+        kwargs = notifier.send_message.call_args[1]
+        assert kwargs.get("chat_id") == "999888777"
+        assert kwargs.get("parse_mode") == "HTML"
+
+    def test_signal_broadcast_skips_when_no_chat_configured(self) -> None:
+        notifier = TelegramNotifier()
+        notifier.enabled = True
+        notifier.group_chat_id = ""
+        notifier.admin_chat_id = ""
+        notifier.send_message = MagicMock()
+
+        notifier.notify(
+            "signal",
+            signal=_signal(),
+            outcome={"signal_status": "Signal Broadcast"},
+            signal_id=1,
+        )
+
+        notifier.send_message.assert_not_called()
+
     def test_disabled_notifier_skips_send(self) -> None:
         """With no token, send_message does nothing and doesn't raise."""
         notifier = TelegramNotifier()

@@ -57,13 +57,33 @@ class Settings(BaseSettings):
         self.telegram_admin_user_id = self.telegram_admin_user_id.strip()
         return self
 
-    # Exchange
+    # Exchange — single default exchange used when a SYMBOLS entry has no
+    # explicit ``exchange:`` prefix. The full list of exchanges the bot is
+    # allowed to fetch from is in ``EXCHANGES`` below. Keeping ``EXCHANGE_NAME``
+    # as a backwards-compatible alias means existing single-exchange .env
+    # files keep working without changes.
     exchange_name: str = Field(default="binance", alias="EXCHANGE_NAME")
+    # Comma-separated list of exchanges the MarketDataProvider should
+    # initialise. Symbols in ``SYMBOLS`` may be qualified with one of these
+    # ids, e.g. ``binance:BTC/USDT, bybit:SOL/USDT, mexc:DOGE/USDT``.
+    # Unqualified symbols default to ``EXCHANGE_NAME``. Examples:
+    #   EXCHANGES=binance              (single-exchange — default)
+    #   EXCHANGES=binance,bybit,mexc   (wider universe)
+    exchanges: str = Field(default="", alias="EXCHANGES")
     exchange_testnet: bool = Field(default=True, alias="EXCHANGE_TESTNET")
     # "spot" | "swap" | "future" — must match the products you actually want to trade.
     # Mismatched markets between the scanner and the signal pipeline will produce
     # signals on instruments you can't trade, so this is unified for both paths.
     exchange_market_type: str = Field(default="swap", alias="EXCHANGE_MARKET_TYPE")
+    # Optional outbound proxy. Set when the host network blocks exchange APIs
+    # (Bybit / MEXC are commonly blocked by UK/EU consumer ISPs and corporate
+    # DNS filters). ccxt's underlying ``requests`` session honours these via
+    # ``exchange.proxies``; urllib's reachability probes pick them up from
+    # the env vars automatically. Either form works:
+    #   HTTPS_PROXY=http://user:pass@proxy.example.com:8080
+    #   HTTPS_PROXY=socks5://127.0.0.1:1080
+    http_proxy: str = Field(default="", alias="HTTP_PROXY")
+    https_proxy: str = Field(default="", alias="HTTPS_PROXY")
     # Maximum tolerated drift between the closed-bar price the strategy used and
     # the live ticker at the moment of broadcast (in percent). Above this, the
     # signal is filtered out and not broadcast.
@@ -163,6 +183,43 @@ class Settings(BaseSettings):
     @property
     def timeframe_list(self) -> list[str]:
         return [item.strip() for item in self.timeframes.split(",") if item.strip()]
+
+    @property
+    def exchange_list(self) -> list[str]:
+        """Distinct exchange ids the MarketDataProvider should initialise.
+
+        Includes every exchange explicitly listed in ``EXCHANGES`` plus the
+        default ``EXCHANGE_NAME`` (so an unqualified symbol always has a
+        provider to route to). Lower-cased to match ccxt's id convention.
+        """
+        explicit = [
+            item.strip().lower()
+            for item in (self.exchanges or "").split(",")
+            if item.strip()
+        ]
+        seen: list[str] = []
+        for ex in [self.exchange_name.lower(), *explicit]:
+            if ex and ex not in seen:
+                seen.append(ex)
+        return seen
+
+    def parse_symbol(self, raw: str) -> tuple[str, str]:
+        """Split an entry from ``SYMBOLS`` into ``(exchange_id, raw_symbol)``.
+
+        Accepts either ``"BTC/USDT"`` (uses default exchange) or
+        ``"binance:BTC/USDT"`` / ``"bybit:SOL/USDT"`` etc. The exchange id is
+        always lower-cased to match ccxt. We only treat the prefix as an
+        exchange id if it contains no slash — that avoids accidentally
+        eating the leading segment of a symbol like ``"USDT:USDT"``.
+        """
+        item = (raw or "").strip()
+        if not item:
+            return (self.exchange_name.lower(), "")
+        if ":" in item:
+            head, _, tail = item.partition(":")
+            if head and tail and "/" not in head:
+                return (head.strip().lower(), tail.strip())
+        return (self.exchange_name.lower(), item)
 
     @property
     def higher_timeframe_pairs(self) -> dict[str, str]:

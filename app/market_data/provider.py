@@ -1,3 +1,32 @@
+"""Market data provider — public OHLCV / ticker fetcher across exchanges.
+
+The provider holds a *registry* of ccxt exchange clients (Binance, Bybit,
+MEXC, …). Symbols can be either bare (``BTC/USDT``) or qualified
+(``bybit:SOL/USDT``); the qualifier picks the exchange in the registry.
+
+Two non-obvious pieces of robustness live here, both required to keep the
+bot working in restricted environments:
+
+1. **Binance public-data CDN fallback.** Many UK/EU consumer ISPs and
+   corporate DNS filters block ``api.binance.com`` while leaving
+   ``data-api.binance.vision`` (the read-only spot CDN behind chart
+   embeds) reachable. When the upstream probe fails for Binance, we
+   reroute spot OHLCV / exchangeInfo / ticker requests through that CDN
+   and constrain market discovery to spot — futures endpoints aren't
+   served by the CDN.
+
+2. **HTTPS_PROXY / HTTP_PROXY plumbing.** Bybit and MEXC have *no*
+   equivalent CDN, so they're either reachable or they're not. If the
+   user provides a proxy via env vars, every ccxt client is configured
+   with it (sync requests via ``exchange.proxies``) and the urllib
+   reachability probe inherits it from the OS env. Without a proxy on a
+   blocked network, those exchanges raise ``ExchangeUnavailable`` and
+   the pipeline simply skips their symbols rather than crashing the
+   whole cycle.
+"""
+
+from __future__ import annotations
+
 import logging
 import time
 from typing import Any
@@ -18,45 +47,96 @@ logger = logging.getLogger(__name__)
 _BINANCE_PUBLIC_DATA_HOST = "https://data-api.binance.vision"
 
 
-class MarketDataProvider:
-    def __init__(self, exchange_name: str | None = None, market_type: str | None = None) -> None:
-        self.exchange_id = exchange_name or settings.exchange_name
-        self.market_type = market_type or settings.exchange_market_type
-        exchange_cls = getattr(ccxt, self.exchange_id)
+class ExchangeUnavailable(RuntimeError):
+    """Raised when an exchange id is requested but not in the registry."""
 
-        config = {
+
+class MarketDataProvider:
+    """Multi-exchange OHLCV / ticker provider.
+
+    A single instance holds one ccxt client per exchange listed in
+    :pyattr:`Settings.exchange_list`. Public methods accept symbols in
+    either ``"BTC/USDT"`` or ``"binance:BTC/USDT"`` form; the prefix
+    routes to the matching client.
+    """
+
+    def __init__(
+        self,
+        exchange_name: str | None = None,
+        market_type: str | None = None,
+        exchanges: list[str] | None = None,
+    ) -> None:
+        self.exchange_id = (exchange_name or settings.exchange_name).lower()
+        self.market_type = market_type or settings.exchange_market_type
+
+        configured = exchanges if exchanges is not None else settings.exchange_list
+        # Make sure the default exchange is always present so unqualified
+        # symbols always resolve to *something*. Preserve user-provided order.
+        ordered: list[str] = []
+        for ex in [*configured, self.exchange_id]:
+            ex = (ex or "").lower()
+            if ex and ex not in ordered:
+                ordered.append(ex)
+
+        self._exchanges: dict[str, ccxt.Exchange] = {}
+        for ex_id in ordered:
+            try:
+                self._exchanges[ex_id] = self._build_exchange(ex_id)
+            except (AttributeError, ccxt.NotSupported) as exc:
+                # Unknown / unsupported exchange id — log & skip rather than
+                # crash. Legitimate failures (bad credentials, throttling)
+                # surface later from fetch_ohlcv with a clearer message.
+                logger.error(
+                    "MarketDataProvider: skipping unsupported exchange %r (%s)",
+                    ex_id,
+                    exc.__class__.__name__,
+                )
+
+        # Keep ``self.exchange`` as a convenience alias for the default
+        # exchange — single-exchange callers and tests rely on it.
+        self.exchange = self._exchanges.get(self.exchange_id)
+        if self.exchange is None:
+            raise ExchangeUnavailable(
+                f"Default exchange {self.exchange_id!r} could not be initialised"
+            )
+
+    # ------------------------------------------------------------------ #
+    #  Construction helpers
+    # ------------------------------------------------------------------ #
+
+    def _build_exchange(self, exchange_id: str) -> ccxt.Exchange:
+        """Construct one ccxt client with the standard per-exchange tuning."""
+        exchange_cls = getattr(ccxt, exchange_id)
+        config: dict[str, Any] = {
             "enableRateLimit": True,
             "timeout": 10000,
             "options": {"defaultType": self.market_type},
         }
+        client = exchange_cls(config)
 
-        self.exchange = exchange_cls(config)
+        # Proxies: ccxt's sync HTTP path uses ``requests`` which honours
+        # ``exchange.proxies``. Setting both 'http' and 'https' covers
+        # whichever scheme the underlying URLs end up using.
+        proxy = settings.https_proxy or settings.http_proxy
+        if proxy:
+            client.proxies = {"http": proxy, "https": proxy}
+            logger.info(
+                "MarketDataProvider: %s using proxy %s",
+                exchange_id,
+                _mask_proxy(proxy),
+            )
 
-        if settings.exchange_testnet and hasattr(self.exchange, "set_sandbox_mode"):
-            self.exchange.set_sandbox_mode(True)
+        if settings.exchange_testnet and hasattr(client, "set_sandbox_mode"):
+            client.set_sandbox_mode(True)
 
-        # If the upstream Binance API isn't reachable (geoblock / DNS filter),
-        # transparently route public read-only calls (klines, exchangeInfo,
-        # tickers) through the public data mirror. This only works for SPOT —
-        # there's no futures equivalent — so we also force market_type to spot
-        # when the fallback is engaged.
-        #
-        # IMPORTANT: ccxt's binance ``urls['api']`` dict has many sub-keys
-        # (public, private, sapi, fapi, fapiPublic, web, ...). We only override
-        # the ones that actually serve spot read-only data — clobbering the
-        # whole dict breaks any attribute ccxt resolves lazily.
-        #
-        # Equally important: ccxt's binance.load_markets() calls four
-        # exchangeInfo endpoints by default (spot api + fapi + dapi + eapi),
-        # because that's how it discovers every tradable market. On a network
-        # where only the spot CDN is reachable, we *must* limit market loading
-        # to spot only, otherwise the first fetch_ohlcv call dies trying to
-        # reach fapi.binance.com regardless of defaultType.
-        if self.exchange_id == "binance" and self._upstream_unreachable():
+        # Binance-only: transparent rerouting through data-api.binance.vision
+        # when api.binance.com is geo-blocked. Constrain market discovery to
+        # spot so load_markets() doesn't hit fapi/dapi/eapi.
+        if exchange_id == "binance" and self._upstream_unreachable():
             self.market_type = "spot"
-            self.exchange.options["defaultType"] = "spot"
-            self.exchange.options["fetchMarkets"] = ["spot"]
-            self.exchange.urls["api"]["public"] = f"{_BINANCE_PUBLIC_DATA_HOST}/api/v3"
+            client.options["defaultType"] = "spot"
+            client.options["fetchMarkets"] = ["spot"]
+            client.urls["api"]["public"] = f"{_BINANCE_PUBLIC_DATA_HOST}/api/v3"
             logger.warning(
                 "api.binance.com unreachable; routing public spot requests through "
                 "%s and limiting market discovery to spot. Keep "
@@ -64,11 +144,15 @@ class MarketDataProvider:
                 _BINANCE_PUBLIC_DATA_HOST,
             )
 
+        return client
+
     def _upstream_unreachable(self) -> bool:
         """Cheap reachability probe to decide whether to use the data mirror.
 
-        Uses a short HTTP HEAD/GET to ``api.binance.com`` with a ~2s timeout,
+        Uses a short HTTP GET to ``api.binance.com`` with a ~2s timeout,
         falling back to True (i.e. *use* the mirror) on any failure.
+        ``urllib.request`` automatically picks up ``HTTPS_PROXY`` from the
+        OS environment, so this respects the user's proxy config.
         """
         import urllib.error
         import urllib.request
@@ -83,71 +167,140 @@ class MarketDataProvider:
         except (urllib.error.URLError, OSError, ValueError):
             return True
 
-    def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int = 500, since: int | None = None) -> list[list[float]]:
-        """Fetch OHLCV data with pagination if limit > exchange limit."""
-        all_ohlcv = []
+    # ------------------------------------------------------------------ #
+    #  Public surface
+    # ------------------------------------------------------------------ #
+
+    @property
+    def exchange_ids(self) -> list[str]:
+        """Ids of every exchange in the registry, in registration order."""
+        return list(self._exchanges.keys())
+
+    def get_exchange(self, exchange_id: str) -> ccxt.Exchange:
+        """Look up a ccxt client by id, or raise :class:`ExchangeUnavailable`."""
+        ex_id = (exchange_id or self.exchange_id).lower()
+        client = self._exchanges.get(ex_id)
+        if client is None:
+            raise ExchangeUnavailable(
+                f"Exchange {ex_id!r} is not initialised. "
+                f"Add it to EXCHANGES (current: {self.exchange_ids})."
+            )
+        return client
+
+    def parse(self, symbol: str) -> tuple[str, str]:
+        """Resolve ``"BTC/USDT"`` or ``"bybit:SOL/USDT"`` to ``(exchange, raw)``.
+
+        Thin wrapper around :meth:`Settings.parse_symbol` that also forces
+        the resulting exchange id to one that's actually in the registry —
+        unknown prefixes fall back to the default exchange (so the user
+        gets *some* result rather than an opaque KeyError).
+        """
+        ex_id, raw = settings.parse_symbol(symbol)
+        if ex_id not in self._exchanges:
+            logger.debug(
+                "Unknown exchange prefix %r for symbol %r; falling back to %s",
+                ex_id,
+                symbol,
+                self.exchange_id,
+            )
+            ex_id = self.exchange_id
+        return ex_id, raw
+
+    def fetch_ohlcv(
+        self,
+        symbol: str,
+        timeframe: str,
+        limit: int = 500,
+        since: int | None = None,
+    ) -> list[list[float]]:
+        """Fetch OHLCV data with pagination if ``limit`` exceeds the per-call cap."""
+        exchange_id, raw_symbol = self.parse(symbol)
+        client = self.get_exchange(exchange_id)
+
+        all_ohlcv: list[list[float]] = []
         current_since = since
         remaining = limit
-        
+
         while remaining > 0:
             fetch_limit = min(remaining, 1000)
             try:
-                ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, current_since, fetch_limit)
+                ohlcv = client.fetch_ohlcv(
+                    raw_symbol, timeframe, current_since, fetch_limit
+                )
                 if not ohlcv:
                     break
-                
+
                 all_ohlcv.extend(ohlcv)
                 remaining -= len(ohlcv)
-                
+
                 last_ts = ohlcv[-1][0]
                 current_since = last_ts + 1
-                
+
                 if remaining > 0:
-                    time.sleep(self.exchange.rateLimit / 1000)
+                    time.sleep(client.rateLimit / 1000)
             except Exception as exc:
-                logger.error("Failed to fetch OHLCV segment for %s: %s", symbol, exc)
+                logger.error(
+                    "Failed to fetch OHLCV segment for %s on %s: %s",
+                    raw_symbol,
+                    exchange_id,
+                    exc,
+                )
                 break
-                
+
         return all_ohlcv[:limit]
 
-    def fetch_futures_symbols(self) -> list[str]:
-        """Fetch all active swap/futures symbols."""
-        markets = self.exchange.load_markets()
+    def fetch_futures_symbols(self, exchange_id: str | None = None) -> list[str]:
+        """Fetch all active swap/futures symbols from the chosen exchange."""
+        client = self.get_exchange(exchange_id or self.exchange_id)
+        markets = client.load_markets()
         return [
-            m["symbol"] for m in markets.values() 
+            m["symbol"]
+            for m in markets.values()
             if m["active"] and (m.get("type") == "swap" or m.get("type") == "future")
         ]
 
-    def fetch_top_volume_symbols(self, limit: int = 50) -> list[str]:
-        """Fetch top N futures symbols by 24h volume for scan efficiency."""
-        tickers = self.exchange.fetch_tickers()
-        futures_symbols = self.fetch_futures_symbols()
-        
-        # Filter for futures and sort by baseVolume or quoteVolume
+    def fetch_top_volume_symbols(
+        self, limit: int = 50, exchange_id: str | None = None
+    ) -> list[str]:
+        """Fetch top N futures symbols on the chosen exchange by 24h volume."""
+        client = self.get_exchange(exchange_id or self.exchange_id)
+        tickers = client.fetch_tickers()
+        futures_symbols = self.fetch_futures_symbols(exchange_id)
+
         valid_tickers = []
-        for symbol in futures_symbols:
-            if symbol in tickers:
-                valid_tickers.append(tickers[symbol])
-        
-        # Sort by quoteVolume (usually USDT volume) descending
+        for sym in futures_symbols:
+            if sym in tickers:
+                valid_tickers.append(tickers[sym])
+
         sorted_tickers = sorted(
-            valid_tickers, 
-            key=lambda x: x.get("quoteVolume") or 0, 
-            reverse=True
+            valid_tickers,
+            key=lambda x: x.get("quoteVolume") or 0,
+            reverse=True,
         )
-        
+
         return [t["symbol"] for t in sorted_tickers[:limit]]
 
     def fetch_ticker(self, symbol: str) -> dict[str, Any]:
+        exchange_id, raw_symbol = self.parse(symbol)
+        client = self.get_exchange(exchange_id)
         attempts = 3
         for attempt in range(1, attempts + 1):
             try:
-                return self.exchange.fetch_ticker(symbol)
+                return client.fetch_ticker(raw_symbol)
             except ccxt.NetworkError:
                 if attempt == attempts:
                     raise
                 time.sleep(attempt)
             except (ccxt.AuthenticationError, ccxt.ExchangeError):
-                # Don't retry logic / auth errors.
+                # Don't retry auth / exchange errors.
                 raise
         return {}
+
+
+def _mask_proxy(proxy: str) -> str:
+    """Strip credentials from a proxy URL for logging."""
+    if "@" not in proxy:
+        return proxy
+    scheme, _, rest = proxy.partition("://")
+    _, _, host = rest.rpartition("@")
+    return f"{scheme}://***@{host}" if scheme else f"***@{host}"

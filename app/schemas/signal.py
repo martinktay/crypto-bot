@@ -17,4 +17,8 @@ class SignalContract(BaseModel):
     reason: str
     ai_explanation: str = ""
     atr_value: float | None = None
+    # Exchange the OHLCV used to compute this signal came from. Stored on
+    # the row so OutcomeTracker re-fetches against the same exchange and
+    # the broadcast can label the source.
+    exchange_id: str = "binance"
     timestamp: datetime

@@ -15,6 +15,11 @@ def test_pipeline_fetches_similar_insights(mock_build, mock_retriever_cls, mock_
     # Mock Market
     pipeline.market_data = MagicMock()
     pipeline.market_data.fetch_ohlcv.return_value = [[1, 2, 3, 4, 5, 6]]
+    # The pipeline now resolves symbols through the provider's registry-aware
+    # parse() so unknown exchange prefixes don't desync from where the data
+    # actually came from. The test universe is unprefixed, so parse always
+    # returns the default exchange.
+    pipeline.market_data.parse.return_value = ("binance", "BTC/USDT")
     
     # Mock Strategy
     strategy_mock = MagicMock()

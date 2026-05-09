@@ -129,10 +129,19 @@ class TelegramNotifier:
         symbol_safe = html.escape(signal.symbol)
         direction_safe = html.escape(signal.signal.value)
         explanation_safe = html.escape(explanation)
+        # Title-case for visual parity with how exchanges brand themselves
+        # ("Binance", "Bybit", "Mexc" rather than the lowercase ccxt id).
+        exchange_safe = html.escape((signal.exchange_id or "").title())
+
+        symbol_block = (
+            f"{symbol_safe} <i>({exchange_safe})</i>"
+            if exchange_safe
+            else symbol_safe
+        )
 
         msg = (
             "<b>🚨 NEW SIGNAL</b>\n"
-            f"Result: {direction_safe} for {symbol_safe}\n"
+            f"Result: {direction_safe} for {symbol_block}\n"
             f"Confidence: {signal.confidence:.1f}%\n"
             "\n"
             "<b>🧠 AI INSIGHT</b>\n"

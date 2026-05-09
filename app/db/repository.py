@@ -54,6 +54,7 @@ class StateRepository:
                 confidence=s.confidence,
                 order_type=s.order_type,
                 reason=s.reason,
+                exchange_id=s.exchange_id or "binance",
                 timestamp=s.timestamp.replace(tzinfo=timezone.utc),
             )
             for s in raw_signals
@@ -84,6 +85,7 @@ class StateRepository:
             order_type=contract.order_type,
             reason=contract.reason,
             ai_explanation=ai_explanation,
+            exchange_id=(contract.exchange_id or "binance"),
             timestamp=ts.replace(tzinfo=None),
         )
         self.db.add(sig)

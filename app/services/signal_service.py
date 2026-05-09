@@ -12,7 +12,7 @@ from app.db.repository import StateRepository
 from app.knowledge_base.embeddings import EmbeddingProvider
 from app.knowledge_base.reasoning import ReasoningEngine
 from app.knowledge_base.retrieval import Retriever
-from app.market_data.provider import MarketDataProvider
+from app.market_data.provider import ExchangeUnavailable, MarketDataProvider
 from app.market_data.sentiment import get_sentiment_provider
 from app.risk_management.engine import RiskEngine
 from app.schemas.signal import SignalContract
@@ -47,17 +47,34 @@ class SignalPipeline:
             logger.info("Bot is paused, skipping cycle.")
             return []
 
-        for symbol in state.symbols:
+        for raw_symbol_entry in state.symbols:
+            # Each entry can be ``BTC/USDT`` (default exchange) or
+            # ``bybit:SOL/USDT`` (qualified). The strategy and broadcast
+            # always see the bare symbol; the exchange id is carried on the
+            # SignalContract so the OutcomeTracker re-fetches from the same
+            # exchange and the broadcast can label the source.
+            try:
+                exchange_id, symbol = self.market_data.parse(raw_symbol_entry)
+            except ExchangeUnavailable as exc:
+                logger.warning("Skipping symbol %s: %s", raw_symbol_entry, exc)
+                continue
+
+            qualified = f"{exchange_id}:{symbol}"
             for timeframe in state.timeframes:
                 try:
-                    raw = self.market_data.fetch_ohlcv(symbol, timeframe)
+                    raw = self.market_data.fetch_ohlcv(qualified, timeframe)
+                except ExchangeUnavailable as exc:
+                    logger.warning("Skipping %s %s: %s", qualified, timeframe, exc)
+                    continue
                 except Exception as exc:
-                    logger.error("Failed to fetch %s %s: %s", symbol, timeframe, exc)
+                    logger.error(
+                        "Failed to fetch %s %s: %s", qualified, timeframe, exc
+                    )
                     continue
 
                 df = pd.DataFrame(raw, columns=["ts", "open", "high", "low", "close", "volume"])
                 if df.empty:
-                    logger.warning("Empty market data for %s %s, skipping", symbol, timeframe)
+                    logger.warning("Empty market data for %s %s, skipping", qualified, timeframe)
                     continue
 
                 # Drop the in-progress bar — strategies must only see closed candles.
@@ -66,12 +83,13 @@ class SignalPipeline:
                 if df.empty:
                     continue
 
-                higher_tf_df = self._fetch_higher_tf(symbol, timeframe)
+                higher_tf_df = self._fetch_higher_tf(qualified, timeframe)
                 strategy_params: dict[str, Any] = {}
                 if higher_tf_df is not None:
                     strategy_params["higher_tf_candles"] = higher_tf_df
 
                 signal = strategy.generate(symbol, timeframe, df, strategy_params or None)
+                signal.exchange_id = exchange_id
                 signal = self._apply_sentiment(signal)
 
                 # AI explanation + RAG retrieval are skipped for HOLD signals when
@@ -132,12 +150,13 @@ class SignalPipeline:
                 
                 outcome = {
                     "symbol": symbol,
+                    "exchange": exchange_id,
                     "timeframe": timeframe,
                     "signal": signal.signal.value,
                     "price": signal.entry_price,
                     "timestamp": signal.timestamp.isoformat() if signal.timestamp else None,
                     "risk_analysis": risk_note,
-                    "limits_analysis": limits_note
+                    "limits_analysis": limits_note,
                 }
                 if review:
                     outcome["agent_score"] = review.score
@@ -161,7 +180,7 @@ class SignalPipeline:
                 if not is_approved:
                     if not str(outcome.get("signal_status", "")).startswith("rejected_by_agent"):
                         outcome["signal_status"] = f"rejected: {risk_note}; {limits_note}"
-                    logger.info("Signal filtered for %s: %s", symbol, outcome["signal_status"])
+                    logger.info("Signal filtered for %s: %s", qualified, outcome["signal_status"])
                     outcomes.append(outcome)
                     continue
 

@@ -133,8 +133,13 @@ async def signals_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         # receive in the group, minus the AI insight (kept short for chat).
         blocks = ["📡 *Recent Signals*"]
         for sig in actionable:
+            exchange_tag = (
+                f" _({(sig.exchange_id or '').title()})_"
+                if sig.exchange_id
+                else ""
+            )
             blocks.append(
-                f"\n*{sig.signal.value}* — `{sig.symbol}` {sig.timeframe}\n"
+                f"\n*{sig.signal.value}* — `{sig.symbol}` {sig.timeframe}{exchange_tag}\n"
                 f"Confidence: {sig.confidence:.1f}%\n"
                 f"Entry: `{_level_str(sig.entry_price)}`\n"
                 f"TP/SL: `{_level_str(sig.take_profit)}` / `{_level_str(sig.stop_loss)}`"

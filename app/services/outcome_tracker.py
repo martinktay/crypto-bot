@@ -89,8 +89,15 @@ class OutcomeTracker:
         signal_ts_utc = sig.timestamp.replace(tzinfo=timezone.utc)
         since_ms = int(signal_ts_utc.timestamp() * 1000)
 
+        # Re-fetch from the *same* exchange the signal originated on, so a
+        # signal generated against bybit candles isn't being resolved
+        # against binance candles. Fall back to the default exchange when
+        # an old row didn't have exchange_id stored.
+        qualified = (
+            f"{sig.exchange_id}:{sig.symbol}" if sig.exchange_id else sig.symbol
+        )
         candles = self.market_data.fetch_ohlcv(
-            sig.symbol, sig.timeframe, limit=500, since=since_ms
+            qualified, sig.timeframe, limit=500, since=since_ms
         )
         if len(candles) > 1:
             candles = candles[:-1]

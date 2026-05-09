@@ -4,18 +4,12 @@ from __future__ import annotations
 
 import logging
 
-from telegram import (
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    ReplyKeyboardMarkup,
-    Update,
-)
+from telegram import ReplyKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.db.repository import StateRepository
-from app.services.signal_service import get_pipeline
 from app.telegram_bot.middleware import is_admin, require_admin
 from app.utils.agent_debug_log import agent_debug_log
 
@@ -107,33 +101,45 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         
         await update.message.reply_text(
             "📊 *Bot Status*\n\n"
-            f"Approval: `{state.approval_mode.value}`\n"
             f"Paused: {'⏸️ Yes' if state.paused else '▶️ No'}\n"
             f"Strategy: `{state.strategy}`\n"
             f"Lessons Learned: `{lessons}` 🧠\n"
             f"Symbols: {', '.join(state.symbols)}\n"
-            f"Timeframes: {', '.join(state.timeframes)}\n"
-            f"Pending approvals: {len(state.approvals)}\n",
+            f"Timeframes: {', '.join(state.timeframes)}\n",
             parse_mode="Markdown",
         )
+
+
+def _level_str(value: float) -> str:
+    """Trim trailing zeros so 80347.620 -> 80347.62, 80300.00 -> 80300."""
+    return f"{float(value):.2f}".rstrip("0").rstrip(".")
 
 
 @require_admin
 async def signals_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     with SessionLocal() as db:
         state = StateRepository(db).get_runtime_state_snapshot()
-        
-        if not state.signals:
-            await update.message.reply_text("📭 No signals generated yet.")
+
+        # HOLD is the explicit "no trade this bar" state in this build — it's
+        # never broadcast and shouldn't appear in /signals either, otherwise
+        # the list is mostly noise (every closed bar that didn't cross).
+        actionable = [s for s in state.signals if s.signal.value in ("LONG", "SHORT")][:5]
+
+        if not actionable:
+            await update.message.reply_text("📭 No actionable signals yet.")
             return
-        
-        lines = ["📡 *Recent Signals*\n"]
-        for sig in state.signals[:5]:
-            lines.append(
-                f"• {sig.symbol} {sig.timeframe} → *{sig.signal.value}* "
-                f"({sig.confidence:.1f}%) @ {sig.entry_price:.2f}"
+
+        # Mirror the broadcast card per signal so /signals matches what subscribers
+        # receive in the group, minus the AI insight (kept short for chat).
+        blocks = ["📡 *Recent Signals*"]
+        for sig in actionable:
+            blocks.append(
+                f"\n*{sig.signal.value}* — `{sig.symbol}` {sig.timeframe}\n"
+                f"Confidence: {sig.confidence:.1f}%\n"
+                f"Entry: `{_level_str(sig.entry_price)}`\n"
+                f"TP/SL: `{_level_str(sig.take_profit)}` / `{_level_str(sig.stop_loss)}`"
             )
-        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        await update.message.reply_text("\n".join(blocks), parse_mode="Markdown")
 
 
 
@@ -145,8 +151,7 @@ async def mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         state = StateRepository(db).get_runtime_state_snapshot()
         await update.message.reply_text(
             f"⚙️ *Mode*\n"
-            f"Execution: `{state.execution_mode}`\n"
-            f"Approval: `{state.approval_mode.value}`",
+            f"Execution: `{state.execution_mode}`",
             parse_mode="Markdown",
         )
 
@@ -329,56 +334,3 @@ async def optimize_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     except Exception as exc:
         logger.error("Optimization failed: %s", exc)
         await update.message.reply_text(f"❌ *Optimization failed*: {str(exc)}", parse_mode="Markdown")
-
-
-# --- Callback handler for approvals ---
-
-
-@require_admin
-async def approval_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle approve/reject button presses."""
-    query = update.callback_query
-    await query.answer()
-
-    try:
-        action, approval_id = query.data.split(":", 1)
-    except ValueError:
-        await query.edit_message_text("❌ Invalid callback data.")
-        return
-
-    approved = action == "approve"
-    pipeline = get_pipeline()
-    
-    with SessionLocal() as db:
-        result = pipeline.apply_approval_decision(db, approval_id, approved)
-
-    status = result.get("result", "unknown")
-
-    if status == "expired":
-        emoji, label = "⏰", "EXPIRED"
-    elif status == "approved":
-        emoji, label = "✅", "APPROVED"
-    elif status == "rejected":
-        emoji, label = "❌", "REJECTED"
-    elif status == "not_found":
-        emoji, label = "❓", "NOT FOUND"
-    else:
-        emoji, label = "⚠️", status.upper()
-
-    text = f"{emoji} *{label}*\nID: `{approval_id[:8]}...`"
-    if result.get("execution"):
-        text += f"\n{result['execution']}"
-
-    await query.edit_message_text(text, parse_mode="Markdown")
-
-
-def build_approval_keyboard(approval_id: str) -> InlineKeyboardMarkup:
-    """Build inline approve/reject buttons for a signal."""
-    return InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton("✅ Approve", callback_data=f"approve:{approval_id}"),
-                InlineKeyboardButton("❌ Reject", callback_data=f"reject:{approval_id}"),
-            ]
-        ]
-    )

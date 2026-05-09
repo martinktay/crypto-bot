@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 from typing import Any
@@ -81,7 +82,7 @@ class TelegramNotifier:
 
         if event_type == "signal" and signal and outcome:
             text = self.build_signal_message(signal, outcome)
-            self.send_message(text, chat_id=self.group_chat_id)
+            self.send_message(text, chat_id=self.group_chat_id, parse_mode="HTML")
 
         elif event_type == "signal_insight":
             symbol = kwargs.get("symbol", "Unknown")
@@ -102,7 +103,13 @@ class TelegramNotifier:
             self.send_message(text, parse_mode="Markdown")
 
     def build_signal_message(self, signal: SignalContract, outcome: dict | None = None) -> str:
-        """Build the broadcast signal card (plain text — matches product template)."""
+        """Build the broadcast signal card.
+
+        Rendered with Telegram's HTML parse mode (chosen over Markdown because
+        the AI explanation can contain raw ``*``/``_``/`` ` `` characters that
+        would otherwise corrupt or be rejected). Section headers are bold and
+        the AI insight body is italicised, matching the product template.
+        """
         _ = outcome  # retained for API compatibility with callers / tests
         explanation = (signal.ai_explanation or signal.reason or "").strip()
         if len(explanation) > 2800:
@@ -115,13 +122,21 @@ class TelegramNotifier:
         tp_s = _level_str(signal.take_profit)
         sl_s = _level_str(signal.stop_loss)
 
+        # html.escape neutralises &, <, > inside untrusted strings (the AI
+        # explanation, the symbol, the direction enum value) so a stray '<'
+        # in the model output can't open a fake tag and trip Telegram's
+        # parser into rejecting the whole message with HTTP 400.
+        symbol_safe = html.escape(signal.symbol)
+        direction_safe = html.escape(signal.signal.value)
+        explanation_safe = html.escape(explanation)
+
         msg = (
-            "🚨 NEW SIGNAL\n"
-            f"Result: {signal.signal.value} for {signal.symbol}\n"
+            "<b>🚨 NEW SIGNAL</b>\n"
+            f"Result: {direction_safe} for {symbol_safe}\n"
             f"Confidence: {signal.confidence:.1f}%\n"
             "\n"
-            "🧠 AI INSIGHT\n"
-            f"{explanation}\n"
+            "<b>🧠 AI INSIGHT</b>\n"
+            f"<i>{explanation_safe}</i>\n"
             "\n"
             f"Entry: {entry_s}\n"
             f"TP/SL: {tp_s} / {sl_s}"

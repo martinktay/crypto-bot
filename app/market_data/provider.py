@@ -133,7 +133,10 @@ class MarketDataProvider:
         # when api.binance.com is geo-blocked. Constrain market discovery to
         # spot so load_markets() doesn't hit fapi/dapi/eapi.
         if exchange_id == "binance" and self._upstream_unreachable():
-            self.market_type = "spot"
+            # Force *this* Binance client to spot + the public-data CDN only.
+            # Do not mutate ``self.market_type``: other exchanges in the same
+            # registry must keep ``settings.exchange_market_type`` (e.g. swap)
+            # or ``fetch_ohlcv`` will hit the wrong market category.
             client.options["defaultType"] = "spot"
             client.options["fetchMarkets"] = ["spot"]
             client.urls["api"]["public"] = f"{_BINANCE_PUBLIC_DATA_HOST}/api/v3"

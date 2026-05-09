@@ -142,6 +142,10 @@ class Settings(BaseSettings):
 
     # Scheduling
     scan_interval_seconds: int = Field(default=300, alias="SCAN_INTERVAL_SECONDS")
+    # Process at most this many SYMBOLS entries per scheduler tick (round-robin).
+    # When 0 or ≥ len(SYMBOLS), every pair runs each tick (can be slow / rate-limit
+    # heavy with large universes). Typical: 50–120 for full Bybit+MEXC USDT lists.
+    scan_symbols_batch_size: int = Field(default=80, alias="SCAN_SYMBOLS_BATCH_SIZE")
 
     # Outcome tracking — periodically resolves open broadcast signals against
     # subsequent OHLCV (TP/SL hit, time-stop) and records realized PnL.

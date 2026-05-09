@@ -252,6 +252,36 @@ class MarketDataProvider:
 
         return all_ohlcv[:limit]
 
+    def usdt_linear_swap_symbols(self, exchange_id: str) -> list[str]:
+        """List active USDT-settled linear perpetual symbols (ccxt unified).
+
+        Includes both ``type`` ``swap`` and linear ``future`` listings where
+        settlement is USDT. Coin-margined (inverse) contracts use a non-USDT
+        ``settle`` and are excluded.
+        """
+        client = self.get_exchange(exchange_id)
+        markets = client.load_markets()
+        found: set[str] = set()
+        for m in markets.values():
+            if not m.get("active"):
+                continue
+            if m.get("type") not in ("swap", "future"):
+                continue
+            settle = m.get("settle")
+            linear = m.get("linear")
+            # USDT-margined linear perp (exclude inverse / coin-margined).
+            if settle == "USDT":
+                if linear is False:
+                    continue
+                found.add(m["symbol"])
+            elif (
+                linear is True
+                and m.get("quote") == "USDT"
+                and (settle in (None, "USDT"))
+            ):
+                found.add(m["symbol"])
+        return sorted(found)
+
     def fetch_futures_symbols(self, exchange_id: str | None = None) -> list[str]:
         """Fetch all active swap/futures symbols from the chosen exchange."""
         client = self.get_exchange(exchange_id or self.exchange_id)

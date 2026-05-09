@@ -22,6 +22,19 @@ from app.services.tradingagents_review import TradingAgentsReviewer
 logger = logging.getLogger(__name__)
 
 
+def _symbol_batch_slice(
+    symbols: list[str], batch: int, offset: int
+) -> tuple[list[str], int]:
+    """Return the next ``batch`` symbols with wrap-around; ``offset`` advances."""
+    if not symbols:
+        return [], 0
+    if batch <= 0 or len(symbols) <= batch:
+        return list(symbols), 0
+    n = len(symbols)
+    chunk = [symbols[(offset + i) % n] for i in range(batch)]
+    return chunk, (offset + batch) % n
+
+
 class SignalPipeline:
     def __init__(self) -> None:
         self.market_data = MarketDataProvider()
@@ -31,6 +44,7 @@ class SignalPipeline:
         self.reviewer = TradingAgentsReviewer()
         self.sentiment = get_sentiment_provider()
         self._notifier: Callable[..., Any] | None = None
+        self._scan_rr_offset: int = 0
 
     def set_notifier(self, notifier: Callable[..., Any]) -> None:
         """Register a notification callback for signal events."""
@@ -47,7 +61,30 @@ class SignalPipeline:
             logger.info("Bot is paused, skipping cycle.")
             return []
 
-        for raw_symbol_entry in state.symbols:
+        symbols = state.symbols
+        batch = settings.scan_symbols_batch_size
+        chunk, new_off = _symbol_batch_slice(symbols, batch, self._scan_rr_offset)
+        if (
+            batch > 0
+            and len(symbols) > batch
+        ):
+            logger.info(
+                "Signal scan batch: %d / %d symbols (round-robin offset was %d → %d)",
+                len(chunk),
+                len(symbols),
+                self._scan_rr_offset,
+                new_off,
+            )
+            self._scan_rr_offset = new_off
+        elif len(symbols) > 200 and batch <= 0:
+            logger.warning(
+                "Large SYMBOLS universe (%d) with SCAN_SYMBOLS_BATCH_SIZE=%s — "
+                "one tick may be very slow; set SCAN_SYMBOLS_BATCH_SIZE to ~80–120.",
+                len(symbols),
+                batch,
+            )
+
+        for raw_symbol_entry in chunk:
             # Each entry can be ``BTC/USDT`` (default exchange) or
             # ``bybit:SOL/USDT`` (qualified). The strategy and broadcast
             # always see the bare symbol; the exchange id is carried on the

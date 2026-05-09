@@ -73,7 +73,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     admin = bool(user and is_admin(user.id))
     await update.message.reply_text(
         f"🤖 *{settings.app_display_name}*\n\n"
-        "I generate trading signals for BTC/USDT and provide AI-powered market insights.\n\n"
+        "I generate trading signals from configured exchanges and timeframes, with optional AI context.\n\n"
         "Use /help to see available commands.",
         parse_mode="Markdown",
         reply_markup=_admin_menu_keyboard() if admin else None,

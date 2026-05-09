@@ -1,6 +1,6 @@
 # Zobo Signal Bot
 
-Production-minded **signal-only** Telegram + FastAPI service marketed as **Zobo Signal Bot**. Live market data (CCXT), strategy signals, risk checks, optional RAG/LLM explanations, manual approval, web dashboard, and outcome tracking.
+Production-minded **signal-only** Telegram + FastAPI service marketed as **Zobo Signal Bot**. Live market data (CCXT), strategy signals, risk checks, optional RAG/LLM explanations, web dashboard, and outcome tracking. Risk-passing signals are auto-broadcast to the configured Telegram group; rejected candidates are filtered silently and inspectable via the dashboard or `/rejected` command.
 
 Official repository: **[github.com/martinktay/crypto-bot](https://github.com/martinktay/crypto-bot)** (`main` branch).
 
@@ -10,17 +10,17 @@ The product name defaults to **Zobo Signal Bot**. Override with **`APP_DISPLAY_N
 
 ## Repository continuity
 
-This codebase is the same GitHub project linked above. It evolves the original MVP (FastAPI, strategies, approvals, Telegram) into PostgreSQL-backed runtime settings, a **signal-only** data model (legacy live execution paths removed), hardened HTTP/WebSocket security, and richer strategies/ops. **`git remote origin`** should point at `https://github.com/martinktay/crypto-bot.git`; there is no separate “other repo” expected for day-to-day work.
+This codebase is the same GitHub project linked above. It evolves the original MVP (FastAPI, strategies, Telegram) into PostgreSQL-backed runtime settings, a **signal-only** data model (legacy live execution and manual approval paths removed), hardened HTTP/WebSocket security, and richer strategies/ops. **`git remote origin`** should point at `https://github.com/martinktay/crypto-bot.git`; there is no separate “other repo” expected for day-to-day work.
 
 ## Features
 
 - **Strategies** (registry): `ema_rsi`, `breakout_volume`, `hybrid_ai` (RL-assisted direction; ATR-style levels like the other strategies).
 - **Market data**: CCXT with configurable `EXCHANGE_MARKET_TYPE` (`spot` | `swap` | `future`).
 - **Risk engine**: Risk–reward and runtime limits before any broadcast.
-- **Pipeline**: Drops the in-progress OHLCV bar, optional higher-timeframe trend filter, optional sentiment tie-breaker (CryptoPanic), broadcast drift check on manual approval.
+- **Pipeline**: Drops the in-progress OHLCV bar, optional higher-timeframe trend filter, optional sentiment tie-breaker (CryptoPanic), broadcast drift check.
 - **Knowledge base**: pgvector-friendly embeddings; RAG for signal explanations; ingestion scripts for PDFs and video transcripts.
 - **LLM**: Chat via `LLM_PROVIDER` (`openai` | `deepseek` | `anthropic`); embeddings default to OpenAI when `OPENAI_API_KEY` is set.
-- **Telegram**: Commands, admin reply keyboard, approval callbacks, structured notifications.
+- **Telegram**: Admin commands and reply keyboard, automatic group broadcast of risk-passing signals, structured outcome notifications.
 - **Dashboard**: `GET /` Jinja UI; `GET /api/dashboard/data` (API key when enabled); WebSocket `/ws/dashboard` (optional token).
 - **Jobs**: APScheduler signal cycle + outcome tracker resolving TP/SL on historical candles.
 - **Scanner**: `POST /scanner/run` — top-volume futures scan (honours `EXCHANGE_MARKET_TYPE`).
@@ -73,7 +73,7 @@ All variables are documented in **`.env.example`**, including:
 | Database | `DATABASE_URL` (Postgres URL; SQLite possible for dev with weaker vector search) |
 | Telegram | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ADMIN_CHAT_ID`, `TELEGRAM_ADMIN_USER_ID`, `TELEGRAM_GROUP_CHAT_ID` |
 | Exchange | `EXCHANGE_NAME`, `EXCHANGE_TESTNET`, `EXCHANGE_MARKET_TYPE` |
-| Risk / signals | `MIN_RISK_REWARD_RATIO`, `SIGNAL_COOLDOWN_MINUTES`, `APPROVAL_MODE`, `SCAN_INTERVAL_SECONDS` |
+| Risk / signals | `MIN_RISK_REWARD_RATIO`, `SIGNAL_COOLDOWN_MINUTES`, `SCAN_INTERVAL_SECONDS`, `MAX_BROADCAST_DRIFT_PERCENT` |
 | Multi-TF / sentiment | `HIGHER_TIMEFRAME_MAP`, `SENTIMENT_ENABLED`, `CRYPTOPANIC_AUTH_TOKEN` |
 | LLM | `LLM_PROVIDER`, `LLM_API_KEY`, `OPENAI_API_KEY`, `SKIP_REASONING_ON_HOLD` |
 
@@ -91,11 +91,9 @@ Unless noted, endpoints require the API key header when **`API_AUTH_ENABLED=true
 | GET | `/why/{index}` | Recent outcome row by index |
 | GET | `/insights` | Analytics + KB snippets |
 | POST | `/signals/run` | Run one signal cycle |
-| POST | `/mode` | Approval mode update |
+| POST | `/mode` | Runtime mode update |
 | POST | `/symbols` | Update symbol list |
 | POST | `/strategy/config` | Set strategy name |
-| GET | `/approvals` | Pending approvals |
-| POST | `/approvals/{approval_id}` | Approve/reject |
 | POST | `/pause`, `/resume` | Pause/resume scans |
 | POST | `/backtest` | Run backtest |
 | GET | `/backtest/history` | Recent backtests |
@@ -124,7 +122,7 @@ pytest tests/ -q
 ## Safety
 
 - Signals are advisory; **not financial advice**.
-- AI and optional TradingAgents reviewer **do not override** deterministic risk rejection.
+- AI and optional TradingAgents reviewer **do not override** deterministic risk filtering.
 - Use **HTTPS**, **API auth**, and **WS token** whenever the stack is reachable beyond localhost.
 
 ## License / contributing

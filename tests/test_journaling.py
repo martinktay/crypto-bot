@@ -60,17 +60,14 @@ def test_journaling_pipeline_end_to_end(mock_db):
         
         # Mock the state snapshot with a real RuntimeState object
         from app.core.state import RuntimeState
-        from app.core.enums import ApprovalMode
-        
+
         state_snapshot = RuntimeState(
-            approval_mode=ApprovalMode.MANUAL_APPROVAL,
             paused=False,
             symbols=["BTC/USDT"],
             timeframes=["15m"],
             strategy="ema_rsi",
             signals=[],
-            approvals={},
-            recent_outcomes=[]
+            recent_outcomes=[],
         )
         with patch('app.services.signal_service.build_strategy', return_value=strategy_mock):
             with patch.object(StateRepository, 'get_runtime_state_snapshot', return_value=state_snapshot):

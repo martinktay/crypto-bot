@@ -38,16 +38,19 @@ class TestMessageFormatting:
         assert "TP/SL:" in msg
         assert "64000 / 58000" in msg
 
-    def test_rejection_message_includes_risk_note(self) -> None:
+    def test_rejection_notify_does_not_send_telegram(self) -> None:
+        """Risk rejections are not pushed to Telegram (signal-only product)."""
         notifier = TelegramNotifier()
-        outcome = {"risk_note": "R:R too low", "limits_note": "OK"}
-        msg = notifier.build_rejection_message(_signal(), outcome)
-        assert "REJECTED" in msg
-        assert "R:R too low" in msg
-        assert "Pair: BTC/USDT" in msg
-        assert "Timeframe: 15m" in msg
-        assert "Risk: R:R too low" in msg
-        assert "Limits: OK" in msg
+        notifier.enabled = True
+        notifier.send_message = MagicMock()
+
+        notifier.notify(
+            "rejection",
+            signal=_signal(),
+            outcome={"risk_note": "R:R too low", "limits_note": "OK"},
+        )
+
+        notifier.send_message.assert_not_called()
 
 
 class TestNotifyDispatch:
@@ -72,24 +75,6 @@ class TestNotifyDispatch:
         assert "Target Hit" in text
         assert "8.33%" in text
         assert "60 mins" in text
-
-    def test_approval_needed_sends_no_inline_keyboard(self) -> None:
-        """Manual approval notification does not include inline buttons (disabled)."""
-        notifier = TelegramNotifier()
-        notifier.enabled = True
-        notifier.send_message = MagicMock()
-
-        notifier.notify(
-            "approval_needed",
-            signal=_signal(),
-            approval_id="abc-123-def-456",
-            outcome={"signal_status": "waiting"},
-        )
-
-        notifier.send_message.assert_called_once()
-        call_kwargs = notifier.send_message.call_args
-        # Ensure no reply_markup was provided.
-        assert call_kwargs[1].get("reply_markup") is None
 
     def test_disabled_notifier_skips_send(self) -> None:
         """With no token, send_message does nothing and doesn't raise."""

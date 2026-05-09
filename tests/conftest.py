@@ -19,13 +19,12 @@ os.environ.setdefault("TELEGRAM_ADMIN_CHAT_ID", "")
 os.environ.setdefault("TELEGRAM_GROUP_CHAT_ID", "")
 os.environ.setdefault("OPENAI_API_KEY", "")
 
-from app.core.enums import ApprovalMode, SignalDirection  # noqa: E402
+from app.core.enums import SignalDirection  # noqa: E402
 from app.db.base import Base  # noqa: E402
 from app.models.entities import (  # noqa: E402
     BotSetting,
     KnowledgeDocument,
     KnowledgeEmbedding,
-    PendingApproval,
     Signal,
 )
 from app.schemas.signal import SignalContract  # noqa: E402
@@ -121,7 +120,6 @@ def seeded_db(db_session):
     """Pre-populate the DB with a BotSetting and a Signal."""
     setting = BotSetting(
         execution_mode="signal_only",
-        approval_mode=ApprovalMode.MANUAL_APPROVAL,
         paused=False,
         symbols=["BTC/USDT"],
         timeframes=["15m"],
@@ -173,7 +171,6 @@ def make_bot_setting(db: Session, **overrides) -> BotSetting:
     """Insert and return a BotSetting row."""
     defaults = dict(
         execution_mode="signal_only",
-        approval_mode=ApprovalMode.AUTO,
         paused=False,
         symbols=["BTC/USDT"],
         timeframes=["15m"],

@@ -83,9 +83,11 @@ class TestWhyEndpoint:
         assert resp.json()["result"] == "not_found"
 
 
-class TestApprovalsEndpoint:
-    def test_approvals_empty(self, test_client, db_session) -> None:
+class TestRemovedEndpoints:
+    def test_approvals_endpoint_gone(self, test_client, db_session) -> None:
         make_bot_setting(db_session)
-        resp = test_client.get("/approvals")
-        assert resp.status_code == 200
-        assert resp.json() == []
+        assert test_client.get("/approvals").status_code == 404
+
+    def test_mode_endpoint_gone(self, test_client, db_session) -> None:
+        make_bot_setting(db_session)
+        assert test_client.post("/mode", json={}).status_code == 404

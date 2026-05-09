@@ -69,11 +69,9 @@ async def test_optimization_to_signal_context_loop(mock_db):
         )
         
         from app.core.state import RuntimeState
-        from app.core.enums import ApprovalMode
         state_snapshot = RuntimeState(
-            approval_mode=ApprovalMode.MANUAL_APPROVAL,
             paused=False, symbols=["ETH/USDT"], timeframes=["1h"],
-            strategy="ema_rsi", signals=[], approvals={}, recent_outcomes=[]
+            strategy="ema_rsi", signals=[], recent_outcomes=[]
         )
         
         with patch('app.services.signal_service.build_strategy', return_value=strategy_mock):

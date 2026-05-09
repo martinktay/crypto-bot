@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.core.enums import ApprovalMode, SignalDirection
+from app.core.enums import SignalDirection
 from app.db.repository import StateRepository
 from app.models.entities import Signal
 from tests.conftest import make_bot_setting, make_signal_contract
@@ -76,30 +76,3 @@ def test_update_symbols_and_strategy(db_session) -> None:
     assert state.strategy == "breakout_volume"
 
 
-# ---------------------------------------------------------------------------
-# Approvals
-# ---------------------------------------------------------------------------
-
-def test_approval_lifecycle(db_session) -> None:
-    """Create → get → resolve approval cycle."""
-    make_bot_setting(db_session)
-    repo = StateRepository(db_session)
-    sig_id = repo.record_signal(make_signal_contract())
-    expires = datetime.now(timezone.utc) + timedelta(minutes=5)
-
-    repo.create_pending_approval("test-approval-1", sig_id, expires)
-
-    pending = repo.get_pending_approval("test-approval-1")
-    assert pending is not None
-    assert pending.status == "pending"
-    assert pending.signal.symbol == "BTC/USDT"
-
-    repo.resolve_approval("test-approval-1", "approved")
-
-    # After resolving, re-fetch shows updated status
-    from sqlalchemy import select
-    from app.models.entities import PendingApproval
-    row = db_session.execute(
-        select(PendingApproval).where(PendingApproval.approval_id == "test-approval-1")
-    ).scalar_one()
-    assert row.status == "approved"

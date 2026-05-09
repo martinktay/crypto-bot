@@ -9,6 +9,15 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 
+# Read-only public market-data mirror for Binance spot. Many networks (UK/EU
+# ISPs, corporate DNS filters, Cloudflare for Families) block api.binance.com
+# at DNS/category level but leave the CDN hostname alone — chart embeds and
+# TradingView reach Binance through this same endpoint. We fall back to it
+# automatically so the bot keeps working in restricted environments without
+# manual proxy configuration.
+_BINANCE_PUBLIC_DATA_HOST = "https://data-api.binance.vision"
+
+
 class MarketDataProvider:
     def __init__(self, exchange_name: str | None = None, market_type: str | None = None) -> None:
         self.exchange_id = exchange_name or settings.exchange_name
@@ -25,6 +34,54 @@ class MarketDataProvider:
 
         if settings.exchange_testnet and hasattr(self.exchange, "set_sandbox_mode"):
             self.exchange.set_sandbox_mode(True)
+
+        # If the upstream Binance API isn't reachable (geoblock / DNS filter),
+        # transparently route public read-only calls (klines, exchangeInfo,
+        # tickers) through the public data mirror. This only works for SPOT —
+        # there's no futures equivalent — so we also force market_type to spot
+        # when the fallback is engaged.
+        #
+        # IMPORTANT: ccxt's binance ``urls['api']`` dict has many sub-keys
+        # (public, private, sapi, fapi, fapiPublic, web, ...). We only override
+        # the ones that actually serve spot read-only data — clobbering the
+        # whole dict breaks any attribute ccxt resolves lazily.
+        #
+        # Equally important: ccxt's binance.load_markets() calls four
+        # exchangeInfo endpoints by default (spot api + fapi + dapi + eapi),
+        # because that's how it discovers every tradable market. On a network
+        # where only the spot CDN is reachable, we *must* limit market loading
+        # to spot only, otherwise the first fetch_ohlcv call dies trying to
+        # reach fapi.binance.com regardless of defaultType.
+        if self.exchange_id == "binance" and self._upstream_unreachable():
+            self.market_type = "spot"
+            self.exchange.options["defaultType"] = "spot"
+            self.exchange.options["fetchMarkets"] = ["spot"]
+            self.exchange.urls["api"]["public"] = f"{_BINANCE_PUBLIC_DATA_HOST}/api/v3"
+            logger.warning(
+                "api.binance.com unreachable; routing public spot requests through "
+                "%s and limiting market discovery to spot. Keep "
+                "EXCHANGE_MARKET_TYPE=spot in .env on this network.",
+                _BINANCE_PUBLIC_DATA_HOST,
+            )
+
+    def _upstream_unreachable(self) -> bool:
+        """Cheap reachability probe to decide whether to use the data mirror.
+
+        Uses a short HTTP HEAD/GET to ``api.binance.com`` with a ~2s timeout,
+        falling back to True (i.e. *use* the mirror) on any failure.
+        """
+        import urllib.error
+        import urllib.request
+
+        try:
+            req = urllib.request.Request(
+                "https://api.binance.com/api/v3/ping",
+                method="GET",
+            )
+            with urllib.request.urlopen(req, timeout=2) as resp:
+                return resp.status >= 400
+        except (urllib.error.URLError, OSError, ValueError):
+            return True
 
     def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int = 500, since: int | None = None) -> list[list[float]]:
         """Fetch OHLCV data with pagination if limit > exchange limit."""

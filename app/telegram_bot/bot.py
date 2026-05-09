@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from telegram import BotCommand, BotCommandScopeChat, BotCommandScopeDefault
+from telegram import BotCommand, BotCommandScopeChat, BotCommandScopeDefault, Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from app.core.config import settings
@@ -33,8 +33,8 @@ _application: Application | None = None
 
 
 async def _telegram_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # #region agent log
     err = context.error
+    # #region agent log
     agent_debug_log(
         "bot.py:_telegram_error_handler",
         "handler error",
@@ -44,6 +44,27 @@ async def _telegram_error_handler(update: object, context: ContextTypes.DEFAULT_
         has_update=update is not None,
     )
     # #endregion
+    if err:
+        logger.error(
+            "Telegram handler error: %s",
+            err,
+            exc_info=(type(err), err, err.__traceback__)
+            if isinstance(err, BaseException)
+            else None,
+        )
+    if isinstance(update, Update) and update.effective_message:
+        try:
+            from telegram.error import BadRequest
+
+            hint = "Try again in a moment. If it keeps failing, restart the bot."
+            if isinstance(err, BadRequest):
+                hint = (
+                    "Telegram rejected the reply (often a formatting issue). "
+                    "This build uses HTML for /status and /signals — retry the command."
+                )
+            await update.effective_message.reply_text(f"⚠️ Command failed. {hint}")
+        except Exception:
+            pass
 
 
 def _public_commands() -> list[BotCommand]:

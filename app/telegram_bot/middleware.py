@@ -17,6 +17,14 @@ def require_admin(func: Callable) -> Callable:
 
     @wraps(func)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Any:
+        if not (settings.telegram_admin_user_id or "").strip():
+            if update.effective_message:
+                await update.effective_message.reply_text(
+                    "⚠️ TELEGRAM_ADMIN_USER_ID is missing in .env. "
+                    "Set it to your numeric Telegram user id (same account you use with the bot), "
+                    "then restart. Until then, /status and other admin commands will not run."
+                )
+            return
         user = update.effective_user
         if not user or not is_admin(user.id):
             if update.effective_message:

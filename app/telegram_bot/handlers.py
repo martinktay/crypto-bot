@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import logging
 
 from telegram import ReplyKeyboardMarkup, Update
@@ -94,22 +95,33 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 @require_admin
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    with SessionLocal() as db:
-        repo = StateRepository(db)
-        state = repo.get_runtime_state_snapshot()
-        lessons = repo.count_knowledge_documents()
-        
+    try:
+        with SessionLocal() as db:
+            repo = StateRepository(db)
+            state = repo.get_runtime_state_snapshot()
+            lessons = repo.count_knowledge_documents()
+    except Exception:
+        logger.exception("status_command: database error")
         await update.message.reply_text(
-            "📊 *Bot Status*\n\n"
-            f"Paused: {'⏸️ Yes' if state.paused else '▶️ No'}\n"
-            f"Strategy: `{state.strategy}`\n"
-            f"Lessons Learned: `{lessons}` 🧠\n"
-            f"Symbols: {', '.join(state.symbols)}\n"
-            f"Timeframes: {', '.join(state.timeframes)}\n\n"
-            "Alerts: only *LONG* or *SHORT* that pass risk checks are posted. "
-            "*HOLD* bars are silent (no trade this bar).",
-            parse_mode="Markdown",
+            "⚠️ Could not load status (database unreachable). "
+            "Check DATABASE_URL / network, restart the bot, and try again."
         )
+        return
+
+    sym = html.escape(", ".join(state.symbols))
+    tf = html.escape(", ".join(state.timeframes))
+    strat = html.escape(state.strategy)
+    text = (
+        "📊 <b>Bot Status</b>\n\n"
+        f"Paused: {'⏸️ Yes' if state.paused else '▶️ No'}\n"
+        f"Strategy: {strat}\n"
+        f"Lessons learned: {lessons} 🧠\n"
+        f"Symbols: {sym}\n"
+        f"Timeframes: {tf}\n\n"
+        "Alerts: only <b>LONG</b> or <b>SHORT</b> that pass risk checks are posted. "
+        "<b>HOLD</b> bars are silent (no trade this bar)."
+    )
+    await update.message.reply_text(text, parse_mode="HTML")
 
 
 def _level_str(value: float) -> str:
@@ -119,34 +131,41 @@ def _level_str(value: float) -> str:
 
 @require_admin
 async def signals_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    with SessionLocal() as db:
-        state = StateRepository(db).get_runtime_state_snapshot()
+    try:
+        with SessionLocal() as db:
+            state = StateRepository(db).get_runtime_state_snapshot()
+    except Exception:
+        logger.exception("signals_command: database error")
+        await update.message.reply_text(
+            "⚠️ Could not load signals (database unreachable). "
+            "Check DATABASE_URL / network and restart the bot."
+        )
+        return
 
-        # HOLD is the explicit "no trade this bar" state in this build — it's
-        # never broadcast and shouldn't appear in /signals either, otherwise
-        # the list is mostly noise (every closed bar that didn't cross).
-        actionable = [s for s in state.signals if s.signal.value in ("LONG", "SHORT")][:5]
+    # HOLD is the explicit "no trade this bar" state in this build — it's
+    # never broadcast and shouldn't appear in /signals either, otherwise
+    # the list is mostly noise (every closed bar that didn't cross).
+    actionable = [s for s in state.signals if s.signal.value in ("LONG", "SHORT")][:5]
 
-        if not actionable:
-            await update.message.reply_text("📭 No actionable signals yet.")
-            return
+    if not actionable:
+        await update.message.reply_text("📭 No actionable signals yet.")
+        return
 
-        # Mirror the broadcast card per signal so /signals matches what subscribers
-        # receive in the group, minus the AI insight (kept short for chat).
-        blocks = ["📡 *Recent Signals*"]
-        for sig in actionable:
-            exchange_tag = (
-                f" _({(sig.exchange_id or '').title()})_"
-                if sig.exchange_id
-                else ""
-            )
-            blocks.append(
-                f"\n*{sig.signal.value}* — `{sig.symbol}` {sig.timeframe}{exchange_tag}\n"
-                f"Confidence: {sig.confidence:.1f}%\n"
-                f"Entry: `{_level_str(sig.entry_price)}`\n"
-                f"TP/SL: `{_level_str(sig.take_profit)}` / `{_level_str(sig.stop_loss)}`"
-            )
-        await update.message.reply_text("\n".join(blocks), parse_mode="Markdown")
+    # HTML: avoid legacy Markdown breaking on symbols like BTC/USDT:USDT or em dashes.
+    blocks = ["📡 <b>Recent Signals</b>"]
+    for sig in actionable:
+        ex = html.escape((sig.exchange_id or "").title())
+        exchange_tag = f" ({ex})" if sig.exchange_id else ""
+        dir_s = html.escape(sig.signal.value)
+        sym_s = html.escape(sig.symbol)
+        tf_s = html.escape(sig.timeframe)
+        blocks.append(
+            f"\n<b>{dir_s}</b> — {sym_s} {tf_s}{exchange_tag}\n"
+            f"Confidence: {sig.confidence:.1f}%\n"
+            f"Entry: {_level_str(sig.entry_price)}\n"
+            f"TP/SL: {_level_str(sig.take_profit)} / {_level_str(sig.stop_loss)}"
+        )
+    await update.message.reply_text("\n".join(blocks), parse_mode="HTML")
 
 
 

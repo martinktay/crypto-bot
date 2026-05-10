@@ -13,6 +13,7 @@ from app.utils.agent_debug_log import agent_debug_log
 from app.telegram_bot.handlers import (
     balance_command,
     backtest_command,
+    chatinfo_command,
     help_command,
     insights_command,
     mode_command,
@@ -24,6 +25,7 @@ from app.telegram_bot.handlers import (
     signals_command,
     status_command,
     start_command,
+    telegramtest_command,
     why_command,
 )
 
@@ -90,6 +92,8 @@ def _full_commands() -> list[BotCommand]:
         BotCommand("backtest", "Run backtest"),
         BotCommand("rejected", "View filtered signals"),
         BotCommand("optimize", "Run optimization (advisory)"),
+        BotCommand("chatinfo", "Show chat id for .env"),
+        BotCommand("telegramtest", "Ping broadcast chats"),
     ]
 
 
@@ -139,6 +143,7 @@ async def start_bot(token: str) -> None:
     # Register command handlers
     _application.add_handler(CommandHandler("start", start_command))
     _application.add_handler(CommandHandler("help", help_command))
+    _application.add_handler(CommandHandler("chatinfo", chatinfo_command))
     _application.add_handler(CommandHandler("status", status_command))
     _application.add_handler(CommandHandler("signals", signals_command))
     _application.add_handler(CommandHandler("positions", positions_command))
@@ -151,6 +156,7 @@ async def start_bot(token: str) -> None:
     _application.add_handler(CommandHandler("backtest", backtest_command))
     _application.add_handler(CommandHandler("rejected", rejected_command))
     _application.add_handler(CommandHandler("optimize", optimize_command))
+    _application.add_handler(CommandHandler("telegramtest", telegramtest_command))
 
     await _application.initialize()
     await _application.start()

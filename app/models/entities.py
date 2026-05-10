@@ -37,6 +37,7 @@ class Signal(Base):
     stop_loss: Mapped[float] = mapped_column(Float)
     take_profit: Mapped[float] = mapped_column(Float)
     confidence: Mapped[float] = mapped_column(Float)
+    confidence_audit_ema_bps: Mapped[float | None] = mapped_column(Float, nullable=True)
     order_type: Mapped[str] = mapped_column(String(20), default="LIMIT")
     reason: Mapped[str] = mapped_column(Text)
     ai_explanation: Mapped[str] = mapped_column(Text, default="")

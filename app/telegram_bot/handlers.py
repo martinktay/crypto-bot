@@ -27,6 +27,7 @@ def _admin_menu_keyboard() -> ReplyKeyboardMarkup:
             ["/mode", "/insights", "/rejected"],
             ["/backtest", "/optimize"],
             ["/pause", "/resume"],
+            ["/chatinfo", "/telegramtest"],
         ],
         resize_keyboard=True,
     )
@@ -54,6 +55,8 @@ def _help_text(is_admin_user: bool) -> str:
         "/optimize — Run GA optimization (advisory)\n"
         "/pause — Pause scanning\n"
         "/resume — Resume scanning\n"
+        "/chatinfo — IDs for `.env` (run in the group once)\n"
+        "/telegramtest — Ping group + DM (delivery test only)\n"
     )
 
 
@@ -134,6 +137,91 @@ def _symbol_list_html_chunks(
 
 
 # --- Admin commands ---
+
+
+@require_admin
+async def chatinfo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show effective chat id/type so admins can fill TELEGRAM_GROUP_CHAT_ID (or admin DM id)."""
+    chat = update.effective_chat
+    if not chat:
+        return
+    type_s = html.escape(str(chat.type))
+    id_s = html.escape(str(chat.id))
+    title = getattr(chat, "title", None) or getattr(chat, "full_name", None)
+    username = getattr(chat, "username", None)
+    parts = [
+        "📎 <b>Chat info</b> (paste into <code>.env</code> as needed)",
+        "",
+        f"chat.type — <code>{type_s}</code>",
+        f"chat.id — <code>{id_s}</code>",
+    ]
+    if title:
+        parts.append("")
+        parts.append(f"Title — <b>{html.escape(str(title))}</b>")
+    if username:
+        parts.append(f"@{html.escape(username)}")
+    bot_uname_raw = getattr(context.bot, "username", None) or ""
+    bot_uname_esc = html.escape(bot_uname_raw) if bot_uname_raw else "your_bot_username"
+    hint = ""
+    if chat.type in ("group", "supergroup"):
+        hint = (
+            "\nPut this in <code>.env</code> as <code>TELEGRAM_GROUP_CHAT_ID=" + id_s + "</code> "
+            "(no spaces, keep the <code>-</code>). Restart the API process so settings reload.\n"
+            "If you still only get signals in your DM, open <code>.env</code> and confirm the group line "
+            "is exactly this id — not your private DM id (typically a shorter positive number).\n"
+            "If Telegram enabled &quot;Topics&quot; / forum mode for this group, also set "
+            "<code>TELEGRAM_GROUP_MESSAGE_THREAD_ID=1</code> (often &quot;General&quot;) or the "
+            "thread id Telegram shows when you deep-link an existing topic.\n"
+            "Check server logs for <code>Telegram send failed</code> (wrong id, bot removed, missing thread id, "
+            "or no permission to send messages)."
+        )
+    elif chat.type == "private":
+        hint = (
+            "\n<b>Your DM with the bot:</b> use <code>TELEGRAM_ADMIN_CHAT_ID=" + id_s + "</code> "
+            "(this is <i>not</i> where group signals are configured).\n\n"
+            "<b>To get the group id for signal cards:</b>\n"
+            "1) In Telegram, open the <b>group chat</b> (header shows the group name; you are not in this private bot chat).\n"
+            "2) Send <code>/chatinfo</code> in that group. If nothing happens, send "
+            f"<code>/chatinfo@{bot_uname_esc}</code>.\n"
+            "3) You should see <code>chat.type — group</code> or <code>supergroup</code> and "
+            "<code>chat.id — -100…</code> (supergroups/channels-as-target often start with <code>-100</code>).\n"
+            "4) Copy <i>that</i> id into <code>TELEGRAM_GROUP_CHAT_ID</code> in <code>.env</code>, save, "
+            "restart the app (Docker or <code>uvicorn</code>).\n\n"
+            "<i>If you see Unauthorized in the group, <code>TELEGRAM_ADMIN_USER_ID</code> in <code>.env</code> "
+            "does not match the numeric id of the account sending /chatinfo.</i>"
+        )
+    parts.append(hint)
+    if bot_uname_raw and chat.type not in ("private",):
+        parts.append(
+            "\n<i>If your client ignores slash commands in this group, use "
+            f"<code>/chatinfo@{html.escape(bot_uname_raw)}</code>.</i>"
+        )
+    await update.message.reply_text("\n".join(parts), parse_mode="HTML")
+
+
+@require_admin
+async def telegramtest_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send a non-trading ping to TELEGRAM_GROUP_CHAT_ID then admin DM."""
+    from app.telegram_bot.service import TelegramNotifier
+
+    notifier = TelegramNotifier()
+    pings = notifier.ping_destinations()
+    if not notifier.enabled:
+        await update.message.reply_text(
+            "⚠️ Telegram notifier disabled. Set TELEGRAM_BOT_TOKEN and "
+            "TELEGRAM_GROUP_CHAT_ID and/or TELEGRAM_ADMIN_CHAT_ID, restart the API."
+        )
+        return
+    if not pings:
+        await update.message.reply_text(
+            "⚠️ No broadcast chat ids configured."
+        )
+        return
+    lines = ["📡 Telegram delivery test sent:"]
+    for row in pings:
+        tick = "✅" if row.get("ok") else "❌"
+        lines.append(f"{tick} chat {row.get('chat', '?')}")
+    await update.message.reply_text("\n".join(lines))
 
 
 @require_admin
@@ -239,9 +327,14 @@ async def signals_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         dir_s = html.escape(sig.signal.value)
         sym_s = html.escape(sig.symbol)
         tf_s = html.escape(sig.timeframe)
+        audit_html = (
+            f"\nEMA audit: {sig.confidence_audit_ema_bps:.1f}%"
+            if sig.confidence_audit_ema_bps is not None
+            else ""
+        )
         blocks.append(
             f"\n<b>{dir_s}</b> — {sym_s} {tf_s}{exchange_tag}\n"
-            f"Confidence: {sig.confidence:.1f}%\n"
+            f"Confidence: {sig.confidence:.1f}%{audit_html}\n"
             f"Entry: {_level_str(sig.entry_price)}\n"
             f"TP/SL: {_level_str(sig.take_profit)} / {_level_str(sig.stop_loss)}"
         )
@@ -325,11 +418,14 @@ async def why_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             return
             
         last = outcomes[0]
+        audit_txt = ""
+        if last.get("confidence_audit_ema_bps") is not None:
+            audit_txt = f"\n⚡ *EMA audit*: {last['confidence_audit_ema_bps']:.1f}%"
         msg = (
             f"🧠 *Signal Explanation*\n\n"
             f"📍 *Symbol*: {last.get('symbol')}\n"
             f"🎯 *Signal*: {last.get('signal')}\n"
-            f"⚡ *Confidence*: {last.get('confidence', 0):.1f}%\n"
+            f"⚡ *Confidence*: {last.get('quality_score', last.get('confidence', 0)):.1f}%{audit_txt}\n"
             f"🛡️ *Risk*: {last.get('risk_note')}\n\n"
             f"📖 *AI Explanation*:\n_{last.get('ai_explanation', 'N/A')}_"
         )

@@ -108,6 +108,35 @@ def run_signal_cycle(db: Session = Depends(get_db), _: None = ApiKeyDep) -> dict
 
 
 
+@router.post("/telegram/ping")
+def telegram_ping(_: None = ApiKeyDep) -> dict[str, object]:
+    """Deliver a benign HTML ping to TELEGRAM_GROUP_CHAT_ID / admin DM (trade-signal parity)."""
+    from app.telegram_bot.service import TelegramNotifier
+
+    notifier = TelegramNotifier()
+    pings = notifier.ping_destinations()
+    if not notifier.enabled:
+        return {
+            "ok": False,
+            "telegram_configured": False,
+            "detail": "missing token or chat id",
+            "pings": [],
+        }
+    if not pings:
+        return {
+            "ok": False,
+            "telegram_configured": True,
+            "detail": "no broadcast destinations",
+            "pings": [],
+        }
+    all_ok = all(bool(p.get("ok")) for p in pings)
+    return {
+        "ok": all_ok,
+        "telegram_configured": True,
+        "pings": pings,
+    }
+
+
 @router.post("/symbols")
 def set_symbols(payload: list[str], db: Session = Depends(get_db), _: None = ApiKeyDep) -> dict[str, list[str]]:
     StateRepository(db).update_symbols_timeframes_strategy(symbols=payload)

@@ -19,3 +19,6 @@ def test_ema_rsi_returns_contract() -> None:
     assert isinstance(signal, SignalContract)
     assert signal.symbol == "BTC/USDT"
     assert 0 <= signal.confidence <= 100
+    assert signal.quality_score == signal.confidence
+    if signal.signal.value == "HOLD":
+        assert signal.confidence_audit_ema_bps is None

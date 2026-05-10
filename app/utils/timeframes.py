@@ -60,11 +60,21 @@ def normalize_user_timeframe_token(token: str) -> str:
 
     - Bare integers become minute bars (``15`` → ``15m``), or hours/days when
       they match common bar sizes (``60`` → ``1h``, ``240`` → ``4h``).
+    - Friendly aliases: ``1day`` → ``1d``, ``1week`` → ``1w``, ``1month`` → ``1M``.
     - Preserves ``…M`` month notation (capital ``M``) for CCXT.
     """
     s = (token or "").strip()
     if not s:
         return s
+    key = s.lower().replace(" ", "")
+    word_aliases: dict[str, str] = {
+        "1day": "1d",
+        "1week": "1w",
+        "1month": "1M",
+        "1mo": "1M",
+    }
+    if key in word_aliases:
+        return word_aliases[key]
     if len(s) >= 2 and s[-1] == "M" and _is_numeric_head(s[:-1]):
         return s
     if s.isdigit():

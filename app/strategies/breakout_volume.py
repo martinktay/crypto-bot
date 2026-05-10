@@ -140,6 +140,7 @@ class BreakoutVolumeStrategy(Strategy):
             entry_price=price,
             stop_loss=float(stop),
             take_profit=float(take),
+            quality_score=confidence,
             confidence=confidence,
             order_type="LIMIT",
             reason=reason,

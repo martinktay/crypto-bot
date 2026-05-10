@@ -6,7 +6,7 @@ from app.utils.timeframes import is_alltime_token
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_TIMEFRAMES = {"5m", "15m", "1h", "4h", "1d", "1w", "1M"}
+SUPPORTED_TIMEFRAMES = {"5m", "15m", "30m", "1h", "4h", "1d", "1w", "1M"}
 
 
 def validate_runtime_settings(settings: Settings) -> None:

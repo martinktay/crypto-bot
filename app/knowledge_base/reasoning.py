@@ -54,8 +54,10 @@ class ReasoningEngine:
             f"SL: {signal.stop_loss:.2f} | "
             f"TP: {signal.take_profit:.2f}\n"
             f"Strategy Reason: {signal.reason}\n"
-            f"Confidence: {signal.confidence:.1f}%\n"
+            f"Quality score: {signal.quality_score:.1f}%\n"
         )
+        if signal.confidence_audit_ema_bps is not None:
+            prompt += f"EMA separation audit: {signal.confidence_audit_ema_bps:.1f}%\n"
         if context:
             prompt += (
                 "\n--- PAST LEARNED LESSONS & RELEVANT STRATEGY CONTEXT ---\n"
@@ -74,7 +76,7 @@ class ReasoningEngine:
             f"Signal: {signal.signal.value} on {signal.symbol} ({signal.timeframe}).",
             f"Strategy reason: {signal.reason}.",
             f"Risk-reward ratio: {rr:.2f}.",
-            f"Confidence: {signal.confidence:.1f}%.",
+            f"Quality score: {signal.quality_score:.1f}%.",
         ]
         if context:
             parts.append(f"Context: {context[:200]}")

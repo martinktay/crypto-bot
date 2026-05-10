@@ -16,7 +16,7 @@ templates_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "templa
 templates = Jinja2Templates(directory=templates_dir)
 
 @router.get("/", response_class=HTMLResponse)
-async def dashboard(request: Request, db: Session = Depends(get_db)):
+def dashboard(request: Request, db: Session = Depends(get_db)):
     """Render the main dashboard page."""
     repo = StateRepository(db)
     state = repo.get_runtime_state_snapshot()

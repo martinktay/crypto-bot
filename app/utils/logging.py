@@ -39,3 +39,7 @@ def setup_logging(level: str = "INFO", format_type: str = "text") -> None:
         root_logger.removeHandler(h)
         
     root_logger.addHandler(handler)
+
+    # httpx logs full request URLs at INFO (Telegram calls embed the bot token in the path).
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)

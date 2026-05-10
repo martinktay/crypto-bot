@@ -1,3 +1,5 @@
+from typing import Any
+
 from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -39,7 +41,16 @@ class Settings(BaseSettings):
             "TELEGRAM_CHAT_ID",
         ),
     )
-    telegram_group_chat_id: str = Field(default="", alias="TELEGRAM_GROUP_CHAT_ID")
+    telegram_group_chat_id: str = Field(
+        default="",
+        alias="TELEGRAM_GROUP_CHAT_ID",
+        description="Supergroup/channel id (often -100…). Required to post signals in a Telegram group.",
+    )
+    #: Forum / "topics" groups: message must target a thread (often use 1 for General).
+    telegram_group_message_thread_id: int | None = Field(
+        default=None,
+        alias="TELEGRAM_GROUP_MESSAGE_THREAD_ID",
+    )
     telegram_admin_user_id: str = Field(
         default="",
         validation_alias=AliasChoices(
@@ -48,12 +59,26 @@ class Settings(BaseSettings):
         ),
     )
 
+    @field_validator("telegram_group_message_thread_id", mode="before")
+    @classmethod
+    def _empty_thread_none(cls, value: Any) -> int | None:
+        if value is None or value == "":
+            return None
+        return int(value)
+
     @model_validator(mode="after")
     def strip_telegram_secrets(self) -> "Settings":
         """Trim .env typos (trailing spaces/quotes) that break API calls and admin checks."""
+
+        def unwrap(s: str) -> str:
+            t = (s or "").strip()
+            if len(t) >= 2 and t[0] == t[-1] and t[0] in "\"'":
+                return t[1:-1].strip()
+            return t
+
         self.telegram_bot_token = self.telegram_bot_token.strip()
-        self.telegram_admin_chat_id = self.telegram_admin_chat_id.strip()
-        self.telegram_group_chat_id = self.telegram_group_chat_id.strip()
+        self.telegram_admin_chat_id = unwrap(self.telegram_admin_chat_id)
+        self.telegram_group_chat_id = unwrap(self.telegram_group_chat_id)
         self.telegram_admin_user_id = self.telegram_admin_user_id.strip()
         return self
 
@@ -134,13 +159,15 @@ class Settings(BaseSettings):
     def _normalize_timeframes_string(cls, v: object) -> object:
         if not isinstance(v, str):
             return v
-        from app.utils.timeframes import normalize_user_timeframe_token
+        from app.utils.timeframes import is_alltime_token, normalize_user_timeframe_token
 
         parts = [
             normalize_user_timeframe_token(p)
             for p in v.split(",")
             if str(p).strip()
         ]
+        # ``all`` / ``alltime`` are valid on ``HTF_ALIGNMENT_TIMEFRAMES`` only.
+        parts = [p for p in parts if p and not is_alltime_token(p)]
         return ",".join(parts)
 
     # Strategy

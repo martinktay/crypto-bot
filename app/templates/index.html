@@ -52,7 +52,7 @@
                 </div>
             </div>
             <div class="card-footer">
-                <span>Signal Success: <strong id="stat-success-count" class="success-text">{{ (summary.win_rate / 100 * summary.total_signals) | round | int }}</strong></span>
+                <span>Signal Success: <strong id="stat-success-count" class="success-text">{{ (((summary.win_rate|default(0)) / 100) * (summary.total_signals|default(0))) | round | int }}</strong></span>
                 <span>Sharpe: <strong class="cyan-text">1.95</strong></span>
             </div>
         </div>
@@ -134,10 +134,12 @@
         
         <div id="signal-list" class="signal-stream">
             {% for sig in outcomes[:20] %}
-            <div class="card signal-card fade-in {{ sig.signal.lower() }}">
+            {% set sigdir = sig.signal|string|trim|lower %}
+            {% set pct = (sig.quality_score | default(sig.confidence | default(0))) | float %}
+            <div class="card signal-card fade-in {{ sigdir }}">
                 <div class="signal-header">
-                    <div class="signal-dir {{ sig.signal.lower() }}">
-                        {% if sig.signal == 'LONG' %}🟢 ▲{% elif sig.signal == 'SHORT' %}🔴 ▼{% else %}🟡 {% endif %}{{ sig.signal }}{% if sig.signal_id %} #{{ '%04d'|format(sig.signal_id) }}{% endif %}
+                    <div class="signal-dir {{ sigdir }}">
+                        {% if sig.signal == 'LONG' %}🟢 ▲{% elif sig.signal == 'SHORT' %}🔴 ▼{% else %}🟡 {% endif %}{{ sig.signal }}{% if sig.signal_id is not none %} #{{ '%04d' | format(sig.signal_id | int) }}{% endif %}
                     </div>
                     {% if sig.success is not none %}
                         {% if sig.success %}
@@ -148,12 +150,12 @@
                     {% endif %}
                 </div>
                 <div class="signal-info">
-                    <h3>{{ sig.symbol }}{% if sig.signal != 'HOLD' %} <span class="dir-indicator {{ sig.signal.lower() }}"> — {{ sig.signal }}</span>{% endif %} <span>{{ sig.timeframe }}</span></h3>
-                    <div class="signal-meta">{% if sig.exchange_id %}{{ (sig.exchange_id ~ '')|title }} • {% endif %}{{ sig.timeframe }} • Confidence {{ "{:.1f}%".format(sig.confidence) }}</div>
+                    <h3>{{ sig.symbol }}{% if sig.signal != 'HOLD' %} <span class="dir-indicator {{ sigdir }}"> — {{ sig.signal }}</span>{% endif %} <span>{{ sig.timeframe }}</span></h3>
+                    <div class="signal-meta">{% if sig.exchange_id %}{{ sig.exchange_id | string | title }} • {% endif %}{{ sig.timeframe }} • Confidence {{ "{:.1f}%".format(pct) }}{% if sig.confidence_audit_ema_bps is not none %} • EMA audit {{ "{:.1f}%".format(sig.confidence_audit_ema_bps | float) }}{% endif %}</div>
                     <div class="trade-metrics-grid">
                         <div class="metric-box">
                             <span class="metric-label">ENTRY</span>
-                            <span class="metric-value">{{ "{:,.2f}".format(sig.entry_price) }}</span>
+                            <span class="metric-value">{{ "{:,.2f}".format(sig.entry_price or 0.0) }}</span>
                         </div>
                         <div class="metric-box">
                             <span class="metric-label">TYPE</span>
@@ -161,21 +163,21 @@
                         </div>
                         <div class="metric-box">
                             <span class="metric-label">CONFIDENCE</span>
-                            <span class="metric-value">{{ "{:.1f}%".format(sig.confidence) }}</span>
+                            <span class="metric-value">{{ "{:.1f}%".format(pct) }}</span>
                         </div>
                         <div class="metric-box">
                             <span class="metric-label">TAKE PROFIT</span>
-                            <span class="metric-value success-text">{{ "{:,.2f}".format(sig.take_profit) }}</span>
+                            <span class="metric-value success-text">{{ "{:,.2f}".format(sig.take_profit or 0.0) }}</span>
                         </div>
                         <div class="metric-box">
                             <span class="metric-label">STOP LOSS</span>
-                            <span class="metric-value draw-text">{{ "{:,.2f}".format(sig.stop_loss) }}</span>
+                            <span class="metric-value draw-text">{{ "{:,.2f}".format(sig.stop_loss or 0.0) }}</span>
                         </div>
                     </div>
                 </div>
                 <div class="signal-confidence" style="margin-top: 10px;">
                     <div class="confidence-bar">
-                        <div class="confidence-fill" style="width: {{ sig.confidence }}%"></div>
+                        <div class="confidence-fill" style="width: {{ pct }}%; max-width: 100%;"></div>
                     </div>
                 </div>
             </div>

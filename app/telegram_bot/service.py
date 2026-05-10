@@ -47,6 +47,19 @@ def _redact_chat_id(chat_id: str) -> str:
     return f"…{s[-4:]}"
 
 
+def _telegram_api_chat_id(raw: str) -> int | str:
+    """Telegram accepts int chat ids for numeric supergroups; normalize JSON payload."""
+    s = (raw or "").strip()
+    if s.startswith("@"):
+        return s
+    if s.startswith("+"):
+        tail = s[1:]
+        return int(tail) if tail.lstrip("-").isdigit() else s
+    if s.lstrip("-").isdigit():
+        return int(s)
+    return s
+
+
 class TelegramNotifier:
     """Sends Telegram messages synchronously using the Bot HTTP API.
 
@@ -58,9 +71,72 @@ class TelegramNotifier:
         self.token = settings.telegram_bot_token
         self.admin_chat_id = settings.telegram_admin_chat_id
         self.group_chat_id = settings.telegram_group_chat_id
+        self.group_message_thread_id = settings.telegram_group_message_thread_id
         self.enabled = bool(self.token and (self.admin_chat_id or self.group_chat_id))
         if self.enabled:
             self.url = f"https://api.telegram.org/bot{self.token}/sendMessage"
+
+    def _default_outbound_chat_id(self) -> str | None:
+        """Prefer admin DM for ad-hoc sends; fall back to group if only the group is set."""
+        a = self.admin_chat_id.strip()
+        if a:
+            return a
+        g = self.group_chat_id.strip()
+        return g or None
+
+    def _signal_broadcast_chat_ids(self) -> list[str]:
+        """Signal cards go here: group first (if set), then admin DM, deduped."""
+        seen: set[str] = set()
+        out: list[str] = []
+        for raw in (self.group_chat_id, self.admin_chat_id):
+            cid = raw.strip()
+            if cid and cid not in seen:
+                seen.add(cid)
+                out.append(cid)
+        return out
+
+    def log_signal_broadcast_plan(self) -> None:
+        """One startup line: where risk-passing signals are posted (ids redacted)."""
+        if not self.enabled:
+            logger.info(
+                "Telegram outbound: disabled (set TELEGRAM_BOT_TOKEN and at least one of "
+                "TELEGRAM_GROUP_CHAT_ID / TELEGRAM_ADMIN_CHAT_ID)"
+            )
+            return
+        order: list[str] = []
+        if self.group_chat_id.strip():
+            order.append(f"group={_redact_chat_id(self.group_chat_id)}")
+        if self.admin_chat_id.strip():
+            order.append(f"admin_dm={_redact_chat_id(self.admin_chat_id)}")
+        if not order:
+            logger.warning(
+                "Telegram token set but no chat IDs — signal broadcast has nowhere to go"
+            )
+            return
+        logger.info(
+            "Telegram signal broadcast order (LONG/SHORT after risk): %s",
+            " then ".join(order),
+        )
+        if self.group_message_thread_id is not None and self.group_chat_id.strip():
+            logger.info(
+                "Telegram group posts use message_thread_id=%s (Topics/forum mode)",
+                self.group_message_thread_id,
+            )
+
+    def ping_destinations(self) -> list[dict[str, object]]:
+        """Post a benign HTML ping to each signal-broadcast chat (verify routing)."""
+        if not self.enabled or not self._signal_broadcast_chat_ids():
+            return []
+        name = html.escape((settings.app_display_name or "Signal bot").strip())
+        msg = (
+            f"<b>{name}</b> — <b>Telegram delivery test</b>\n"
+            "<i>Not a trade signal — only checks that outbound messages reach this chat.</i>"
+        )
+        out: list[dict[str, object]] = []
+        for cid in self._signal_broadcast_chat_ids():
+            ok = self.send_message(msg, chat_id=cid, parse_mode="HTML")
+            out.append({"chat": _redact_chat_id(cid), "ok": ok})
+        return out
 
     def send_message(
         self,
@@ -69,15 +145,22 @@ class TelegramNotifier:
         reply_markup: dict | None = None,
         *,
         parse_mode: str | None = None,
-    ) -> None:
-        """Send a message to a specific chat (defaults to admin)."""
-        target_id = chat_id or self.admin_chat_id
-        if not self.enabled or not target_id:
-            return
+    ) -> bool:
+        """Send a message. Returns ``True`` only when Telegram returns HTTP 200."""
+        target_raw = chat_id or self._default_outbound_chat_id()
+        if not self.enabled or not target_raw:
+            return False
+        api_chat_id = _telegram_api_chat_id(str(target_raw))
         payload: dict[str, Any] = {
-            "chat_id": target_id,
+            "chat_id": api_chat_id,
             "text": _truncate(text),
         }
+        if (
+            self.group_message_thread_id is not None
+            and self.group_chat_id.strip()
+            and str(target_raw).strip() == self.group_chat_id.strip()
+        ):
+            payload["message_thread_id"] = self.group_message_thread_id
         if parse_mode:
             payload["parse_mode"] = parse_mode
         if reply_markup:
@@ -97,24 +180,26 @@ class TelegramNotifier:
                     pass
                 logger.warning(
                     "Telegram send failed to %s (status=%s): %s",
-                    _redact_chat_id(str(target_id)),
+                    _redact_chat_id(str(target_raw)),
                     resp.status_code,
                     detail,
                 )
-            else:
-                logger.debug(
-                    "Telegram message sent OK (chat %s)",
-                    _redact_chat_id(str(target_id)),
-                )
+                return False
+            logger.debug(
+                "Telegram message sent OK (chat %s)",
+                _redact_chat_id(str(target_raw)),
+            )
+            return True
         except Exception as exc:
             from app.monitoring.metrics import notifications_failed
 
             notifications_failed.labels(kind="telegram").inc()
             logger.error(
                 "Telegram send error to %s: %s",
-                _redact_chat_id(str(target_id)),
+                _redact_chat_id(str(target_raw)),
                 exc.__class__.__name__,
             )
+            return False
 
     def notify(self, event_type: str, **kwargs: Any) -> None:
         """Notification callback for SignalPipeline."""
@@ -126,22 +211,38 @@ class TelegramNotifier:
             chunks = self.build_signal_message_chunks(
                 signal, outcome, signal_id=signal_id
             )
-            target_chat = (self.group_chat_id or self.admin_chat_id).strip()
-            if not target_chat:
+            destinations = self._signal_broadcast_chat_ids()
+            if not destinations:
                 logger.warning(
                     "Telegram signal broadcast skipped: set TELEGRAM_GROUP_CHAT_ID and/or "
                     "TELEGRAM_CHAT_ID (admin / TELEGRAM_ADMIN_CHAT_ID) so the bot knows where to post."
                 )
                 return
-            for part in chunks:
-                self.send_message(part, chat_id=target_chat, parse_mode="HTML")
-            logger.info(
-                "Signal broadcast dispatched (%s %s → chat %s, parts=%d)",
-                (signal.symbol or "").upper(),
-                signal.signal.value,
-                _redact_chat_id(target_chat),
-                len(chunks),
-            )
+            for target_chat in destinations:
+                dest_ok = True
+                for part in chunks:
+                    if not self.send_message(
+                        part, chat_id=target_chat, parse_mode="HTML"
+                    ):
+                        dest_ok = False
+                if dest_ok:
+                    logger.info(
+                        "Telegram signal broadcast delivered (%s %s → chat %s, parts=%d)",
+                        (signal.symbol or "").upper(),
+                        signal.signal.value,
+                        _redact_chat_id(target_chat),
+                        len(chunks),
+                    )
+                else:
+                    logger.warning(
+                        "Telegram signal broadcast incomplete for chat %s (%s %s, parts=%d). "
+                        "Check logs above; Topics/forum groups often need TELEGRAM_GROUP_MESSAGE_THREAD_ID "
+                        "(try 1 for General).",
+                        _redact_chat_id(target_chat),
+                        (signal.symbol or "").upper(),
+                        signal.signal.value,
+                        len(chunks),
+                    )
 
         elif event_type == "signal_insight":
             symbol = kwargs.get("symbol", "Unknown")
@@ -159,7 +260,8 @@ class TelegramNotifier:
                 f"Virtual ROI: `{roi_pct:.2f}%`"
                 f"\nDuration: `{int(duration // 60)} mins`"
             )
-            self.send_message(text, parse_mode="Markdown")
+            for target_chat in self._signal_broadcast_chat_ids():
+                self.send_message(text, chat_id=target_chat, parse_mode="Markdown")
 
     def build_signal_message_chunks(
         self,
@@ -202,7 +304,10 @@ class TelegramNotifier:
         if exchange_safe:
             meta_parts.append(exchange_safe)
         meta_parts.append(html.escape(signal.timeframe))
+        # Same numeric value as ``quality_score``; users expect the word "Confidence".
         meta_parts.append(f"Confidence {signal.confidence:.1f}%")
+        if signal.confidence_audit_ema_bps is not None:
+            meta_parts.append(f"EMA audit {signal.confidence_audit_ema_bps:.1f}%")
         meta_line = " • ".join(meta_parts)
 
         header = (

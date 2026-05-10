@@ -68,22 +68,41 @@ class StateRepository:
         raw_signals = self.db.execute(
             select(Signal).order_by(desc(Signal.timestamp)).limit(10)
         ).scalars().all()
-        signals = [
-            SignalContract(
-                symbol=s.symbol,
-                timeframe=s.timeframe,
-                signal=s.signal,
-                entry_price=s.entry_price,
-                stop_loss=s.stop_loss,
-                take_profit=s.take_profit,
-                confidence=s.confidence,
-                order_type=s.order_type,
-                reason=s.reason,
-                exchange_id=s.exchange_id or "binance",
-                timestamp=s.timestamp.replace(tzinfo=timezone.utc),
+        signals = []
+        for s in raw_signals:
+            ts_raw = s.timestamp
+            if ts_raw is None:
+                ts_contract = datetime.now(timezone.utc)
+            elif ts_raw.tzinfo:
+                ts_contract = ts_raw.astimezone(timezone.utc)
+            else:
+                ts_contract = ts_raw.replace(tzinfo=timezone.utc)
+
+            signals.append(
+                SignalContract(
+                    symbol=s.symbol,
+                    timeframe=s.timeframe,
+                    signal=s.signal,
+                    entry_price=s.entry_price or 0.0,
+                    stop_loss=s.stop_loss or 0.0,
+                    take_profit=s.take_profit or 0.0,
+                    quality_score=(
+                        float(s.confidence)
+                        if s.confidence is not None
+                        else 0.0
+                    ),
+                    confidence=(
+                        float(s.confidence)
+                        if s.confidence is not None
+                        else 0.0
+                    ),
+                    confidence_audit_ema_bps=getattr(s, "confidence_audit_ema_bps", None),
+                    order_type=s.order_type or "LIMIT",
+                    reason=s.reason or "",
+                    exchange_id=s.exchange_id or "binance",
+                    timestamp=ts_contract,
+                )
             )
-            for s in raw_signals
-        ]
 
         return RuntimeState(
             paused=setting.paused,
@@ -107,6 +126,7 @@ class StateRepository:
             stop_loss=contract.stop_loss,
             take_profit=contract.take_profit,
             confidence=contract.confidence,
+            confidence_audit_ema_bps=contract.confidence_audit_ema_bps,
             order_type=contract.order_type,
             reason=contract.reason,
             ai_explanation=ai_explanation,
@@ -153,18 +173,22 @@ class StateRepository:
             else:
                 success = None
 
+            conf = float(s.confidence) if s.confidence is not None else 0.0
+
             outcomes.append({
                 "signal_id": s.id,
                 "symbol": s.symbol,
                 "timeframe": s.timeframe,
                 "strategy": "N/A",
                 "signal": s.signal.value,
-                "confidence": s.confidence,
+                "confidence": conf,
+                "quality_score": conf,
+                "confidence_audit_ema_bps": getattr(s, "confidence_audit_ema_bps", None),
                 "order_type": s.order_type,
                 "exchange_id": s.exchange_id,
-                "entry_price": s.entry_price,
-                "stop_loss": s.stop_loss,
-                "take_profit": s.take_profit,
+                "entry_price": float(s.entry_price) if s.entry_price is not None else 0.0,
+                "stop_loss": float(s.stop_loss) if s.stop_loss is not None else 0.0,
+                "take_profit": float(s.take_profit) if s.take_profit is not None else 0.0,
                 "risk_note": s.reason,
                 "signal_status": s.outcome_status,
                 "ai_explanation": s.ai_explanation,

@@ -57,7 +57,8 @@ async def lifespan(app: FastAPI):
 
     # Wire Telegram & WebSocket notifications
     notifier = TelegramNotifier()
-    
+    notifier.log_signal_broadcast_plan()
+
     def unified_notify(event_type: str, **kwargs: Any):
         """Bridge sync callbacks to Telegram and WebSockets."""
         notifier.notify(event_type, **kwargs)

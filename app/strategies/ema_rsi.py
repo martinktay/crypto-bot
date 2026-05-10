@@ -147,9 +147,24 @@ class EmaRsiStrategy(Strategy):
                 atr_value=atr_value,
             )
 
-        # Confidence: scaled separation between EMAs vs price, soft-capped.
+        # Confidence is a *display / triage* score — not a calibrated probability.
+        # Raw EMA separation in basis points at the *crossover* bar is usually
+        # small (the two EMAs just met), so using ``ema_sep_bps`` alone clamps
+        # most trades near the 40% floor and almost never reaches the 80s.
+        # Blend RSI conviction with separation so strong momentum + decent
+        # spread can still read as high confidence.
         ema_sep_bps = abs(last["ema_fast"] - last["ema_slow"]) / max(price, 1e-9) * 10000
-        confidence = float(min(95.0, max(40.0, ema_sep_bps)))
+        sep_norm = min(1.0, max(0.0, ema_sep_bps / 35.0))
+        if direction == SignalDirection.LONG:
+            rsi_room = max(float(rsi_long_threshold) - 50.0, 1e-9)
+            rsi_push = (rsi_value - 50.0) / rsi_room
+        else:
+            rsi_room = max(50.0 - float(rsi_short_threshold), 1e-9)
+            rsi_push = (50.0 - rsi_value) / rsi_room
+        rsi_norm = max(0.0, min(1.0, float(rsi_push)))
+        blend = 0.5 * rsi_norm + 0.5 * sep_norm
+        quality_score = float(min(95.0, max(40.0, 40.0 + 55.0 * blend)))
+        audit_ema = float(min(95.0, max(40.0, ema_sep_bps)))
 
         reason = (
             f"EMA{ema_fast_n}/EMA{ema_slow_n} cross "
@@ -166,7 +181,9 @@ class EmaRsiStrategy(Strategy):
             entry_price=price,
             stop_loss=float(stop),
             take_profit=float(take),
-            confidence=confidence,
+            quality_score=quality_score,
+            confidence_audit_ema_bps=audit_ema,
+            confidence=quality_score,
             order_type="LIMIT",
             reason=reason,
             atr_value=atr_value,

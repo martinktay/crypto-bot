@@ -130,10 +130,14 @@ function handleNewSignal(signal) {
     const callsign = sid != null && sid > 0 ? ` #${String(sid).padStart(4, '0')}` : '';
 
     const exch = _exchangeLabel(signal.exchange_id);
+    const qs = signal.quality_score != null ? Number(signal.quality_score) : Number(signal.confidence);
     const metaParts = [];
     if (exch) metaParts.push(exch);
     metaParts.push(signal.timeframe);
-    metaParts.push(`Confidence ${Number(signal.confidence).toFixed(1)}%`);
+    metaParts.push(`Confidence ${qs.toFixed(1)}%`);
+    if (signal.confidence_audit_ema_bps != null) {
+        metaParts.push(`EMA audit ${Number(signal.confidence_audit_ema_bps).toFixed(1)}%`);
+    }
     const metaLine = metaParts.join(' • ');
 
     let outcomeTag = '';
@@ -166,7 +170,7 @@ function handleNewSignal(signal) {
                 </div>
                 <div class="metric-box">
                     <span class="metric-label">CONFIDENCE</span>
-                    <span class="metric-value">${signal.confidence.toFixed(1)}%</span>
+                    <span class="metric-value">${qs.toFixed(1)}%</span>
                 </div>
                 <div class="metric-box">
                     <span class="metric-label">TAKE PROFIT</span>
@@ -180,7 +184,7 @@ function handleNewSignal(signal) {
         </div>
         <div class="signal-confidence" style="margin-top: 10px;">
             <div class="confidence-bar">
-                <div class="confidence-fill" style="width: ${signal.confidence}%"></div>
+                <div class="confidence-fill" style="width: ${qs}%"></div>
             </div>
         </div>
     `;
